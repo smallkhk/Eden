@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>LiveChar — Admin</title>
+<style>
+  :root { --bg:#0b0d12; --panel:#141821; --line:#232a38; --text:#e8ecf3; --dim:#8b95a8; --acc:#7c5cff; --ok:#2ecc8f; --bad:#ff5d6c; }
+  * { box-sizing:border-box; } [hidden] { display:none !important; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:17px; margin:0; } header a { margin-left:auto; color:var(--acc); text-decoration:none; font-size:14px; }
+  main { max-width:1100px; margin:0 auto; padding:16px; display:grid; gap:16px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; }
+  h2 { font-size:15px; margin:0 0 12px; }
+  .tiles { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+  .tile { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px; }
+  .tile b { display:block; font-size:22px; } .tile span { font-size:12px; color:var(--dim); text-transform:uppercase; letter-spacing:.6px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+  label { display:block; font-size:12px; color:var(--dim); margin-bottom:5px; text-transform:uppercase; letter-spacing:.6px; }
+  input[type=text], input[type=password], input[type=number], input[type=search] { width:100%; background:#0e1118; color:var(--text); border:1px solid var(--line); border-radius:10px; padding:9px 10px; font:inherit; }
+  .hint { font-size:12px; color:var(--dim); margin-top:4px; }
+  .check { display:flex; align-items:center; gap:8px; font-size:14px; } .check input { accent-color:var(--acc); }
+  button { cursor:pointer; border:1px solid var(--line); background:#1b2130; color:var(--text); border-radius:9px; padding:8px 12px; font:inherit; font-size:13px; }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#fff; font-weight:600; font-size:15px; padding:10px 18px; }
+  .scroll { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th { text-align:left; font-size:12px; color:var(--dim); font-weight:500; text-transform:uppercase; letter-spacing:.6px; padding:8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  td { padding:8px; border-bottom:1px solid var(--line); vertical-align:middle; white-space:nowrap; }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .tag { font-size:11px; padding:2px 7px; border-radius:999px; background:var(--line); color:var(--dim); margin-left:6px; }
+  .tag.a { background:rgba(124,92,255,.2); color:#b7a6ff; } .tag.d { background:rgba(255,93,108,.15); color:var(--bad); }
+  .add { display:flex; gap:6px; } .add input { width:110px; }
+  .pos { color:var(--ok); } .neg { color:var(--bad); }
+  #msg { font-size:13px; min-height:18px; margin-top:10px; color:var(--ok); } #msg.err { color:var(--bad); }
+  @media (max-width:700px) { .tiles { grid-template-columns:repeat(2,1fr); } }
+</style>
+</head>
+<body>
+<header><h1>LiveChar Admin</h1><a href="/">← Back to studio</a></header>
+<main>
+  <section class="tiles">
+    <div class="tile"><b id="tUsers">–</b><span>Users</span></div>
+    <div class="tile"><b id="tLive">–</b><span>Live now</span></div>
+    <div class="tile"><b id="tBal">–</b><span>Balance held</span></div>
+    <div class="tile"><b id="tUsed">–</b><span>Seconds used</span></div>
+  </section>
+
+  <section class="panel">
+    <h2>API keys</h2>
+    <div class="grid">
+      <div><label for="fal_key">fal.ai key (Eden Live)</label><input id="fal_key" type="password" autocomplete="off" placeholder=""><div class="hint" id="falHint"></div></div>
+      <div><label for="decart_key">Decart key (Lucy)</label><input id="decart_key" type="password" autocomplete="off" placeholder=""><div class="hint" id="decartHint"></div></div>
+    </div>
+    <div class="hint">Leave a key box empty to keep the current key.</div>
+
+    <h2 style="margin-top:20px">Billing</h2>
+    <div class="grid">
+      <div><label for="rate_lucy">Lucy rate</label><input id="rate_lucy" type="number" min="0" step="0.1"></div>
+      <div><label for="rate_eden_5b">Eden 5B rate</label><input id="rate_eden_5b" type="number" min="0" step="0.1"></div>
+      <div><label for="rate_eden_14b">Eden 14B rate</label><input id="rate_eden_14b" type="number" min="0" step="0.1"></div>
+      <div><label for="first_frame_fee">Eden character-image fee</label><input id="first_frame_fee" type="number" min="0" step="1"></div>
+      <div><label for="max_session_seconds">Max session length (seconds)</label><input id="max_session_seconds" type="number" min="10" step="10"></div>
+      <div><label for="signup_bonus">Free seconds on sign-up</label><input id="signup_bonus" type="number" min="0" step="10"></div>
+    </div>
+    <div class="hint">Rate = balance seconds taken per second of live video. 1 means one for one; 2 means the engine costs double.</div>
+    <div class="grid" style="margin-top:12px">
+      <label class="check" style="text-transform:none;letter-spacing:0;color:var(--text);font-size:14px"><input id="allow_signup" type="checkbox"> Allow new sign-ups</label>
+      <label class="check" style="text-transform:none;letter-spacing:0;color:var(--text);font-size:14px"><input id="lucy_fast" type="checkbox"> Lucy fast mode (Decart bills it at 2×)</label>
+    </div>
+    <div style="margin-top:14px"><button id="save" class="primary">Save settings</button></div>
+    <div id="msg"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Users</h2>
+    <input id="search" type="search" placeholder="Search username" style="max-width:280px;margin-bottom:10px">
+    <div class="scroll"><table>
+      <thead><tr><th>User</th><th class="num">Balance</th><th class="num">Used</th><th>Add / remove seconds</th><th>Actions</th></tr></thead>
+      <tbody id="users"></tbody>
+    </table></div>
+  </section>
+
+  <section class="panel">
+    <h2>Recent sessions</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>When</th><th>User</th><th>Engine</th><th class="num">Length</th><th class="num">Charged</th></tr></thead>
+      <tbody id="sessions"></tbody>
+    </table></div>
+  </section>
+
+  <section class="panel">
+    <h2>Balance history</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>When</th><th>User</th><th class="num">Change</th><th>Reason</th></tr></thead>
+      <tbody id="ledger"></tbody>
+    </table></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmt = (s) => { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return (h ? h + "h " : "") + (h || m ? m + "m " : "") + (s % 60) + "s"; };
+const when = (t) => new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+const NUMS = ["rate_lucy", "rate_eden_5b", "rate_eden_14b", "first_frame_fee", "max_session_seconds", "signup_bonus"];
+
+async function api(path, body) {
+  const r = await fetch(path, { method: body ? "POST" : "GET", headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+  if (r.status === 401 || r.status === 403) { location.href = "/"; throw new Error("Not allowed"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || "Request failed");
+  return j;
+}
+function say(text, err) { $("msg").textContent = text; $("msg").className = err ? "err" : ""; }
+
+async function loadSettings() {
+  const s = await api("/api/admin/settings");
+  for (const k of NUMS) $(k).value = s[k];
+  $("allow_signup").checked = s.allow_signup; $("lucy_fast").checked = s.lucy_fast;
+  $("falHint").textContent = s.fal_key_hint ? "Current: " + s.fal_key_hint : "No key saved yet";
+  $("decartHint").textContent = s.decart_key_hint ? "Current: " + s.decart_key_hint : "No key saved yet";
+  $("fal_key").placeholder = s.fal_key_hint ? "Paste a new key to replace it" : "Paste your fal.ai key";
+  $("decart_key").placeholder = s.decart_key_hint ? "Paste a new key to replace it" : "Paste your Decart key";
+}
+$("save").onclick = async () => {
+  const body = { allow_signup: $("allow_signup").checked, lucy_fast: $("lucy_fast").checked, fal_key: $("fal_key").value, decart_key: $("decart_key").value };
+  for (const k of NUMS) body[k] = $(k).value;
+  try { await api("/api/admin/settings", body); $("fal_key").value = ""; $("decart_key").value = ""; await loadSettings(); say("Settings saved"); }
+  catch (e) { say(e.message, true); }
+};
+
+async function loadUsers() {
+  const { users } = await api("/api/admin/users?q=" + encodeURIComponent($("search").value.trim()));
+  $("users").innerHTML = users.map((u) => `
+    <tr data-id="${u.id}" data-name="${esc(u.username)}">
+      <td>${esc(u.username)}${u.is_admin ? '<span class="tag a">admin</span>' : ""}${u.disabled ? '<span class="tag d">disabled</span>' : ""}</td>
+      <td class="num">${fmt(u.balance)}</td>
+      <td class="num">${fmt(u.used)}</td>
+      <td><div class="add"><input type="number" step="1" placeholder="e.g. 600" aria-label="Seconds to add for ${esc(u.username)}"><button data-act="add">Apply</button></div></td>
+      <td><button data-act="pw">Reset password</button> <button data-act="toggle">${u.disabled ? "Enable" : "Disable"}</button> <button data-act="admin">${u.is_admin ? "Remove admin" : "Make admin"}</button></td>
+    </tr>`).join("") || '<tr><td colspan="5" style="color:var(--dim)">No users found</td></tr>';
+  window.__users = Object.fromEntries(users.map((u) => [u.id, u]));
+}
+$("users").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button"); if (!btn) return;
+  const tr = btn.closest("tr"), id = tr.dataset.id, u = window.__users[id];
+  try {
+    if (btn.dataset.act === "add") {
+      const delta = Number(tr.querySelector("input").value);
+      if (!delta) return say("Enter seconds to add (use a minus sign to remove)", true);
+      await api(`/api/admin/users/${id}/balance`, { delta });
+      say(`${delta > 0 ? "Added" : "Removed"} ${Math.abs(delta)}s ${delta > 0 ? "to" : "from"} ${u.username}`);
+    } else if (btn.dataset.act === "pw") {
+      const password = prompt(`New password for ${u.username} (6+ characters)`); if (!password) return;
+      await api(`/api/admin/users/${id}`, { password }); say(`Password changed for ${u.username}`);
+    } else if (btn.dataset.act === "toggle") {
+      await api(`/api/admin/users/${id}`, { disabled: !u.disabled }); say(`${u.username} ${u.disabled ? "enabled" : "disabled"}`);
+    } else if (btn.dataset.act === "admin") {
+      if (!confirm(`${u.is_admin ? "Remove admin from" : "Make"} ${u.username}${u.is_admin ? "?" : " an admin?"}`)) return;
+      await api(`/api/admin/users/${id}`, { is_admin: !u.is_admin }); say(`${u.username} updated`);
+    }
+    await Promise.all([loadUsers(), loadActivity()]);
+  } catch (err) { say(err.message, true); }
+  $("msg").scrollIntoView({ block: "nearest" });
+});
+let st; $("search").oninput = () => { clearTimeout(st); st = setTimeout(loadUsers, 250); };
+
+async function loadActivity() {
+  const a = await api("/api/admin/activity");
+  $("tUsers").textContent = a.totals.users; $("tLive").textContent = a.totals.live;
+  $("tBal").textContent = fmt(a.totals.balance); $("tUsed").textContent = fmt(a.totals.used);
+  $("sessions").innerHTML = a.sessions.map((s) => `<tr><td>${when(s.started_at)}</td><td>${esc(s.username)}</td><td>${esc(s.engine)}${s.ended_at ? "" : '<span class="tag a">live</span>'}</td>
+    <td class="num">${fmt(((s.ended_at || s.last_beat) - s.started_at) / 1000)}</td><td class="num">${fmt(s.charged)}</td></tr>`).join("") || '<tr><td colspan="5" style="color:var(--dim)">No sessions yet</td></tr>';
+  $("ledger").innerHTML = a.ledger.map((l) => `<tr><td>${when(l.created_at)}</td><td>${esc(l.username)}</td>
+    <td class="num ${l.delta >= 0 ? "pos" : "neg"}">${l.delta >= 0 ? "+" : "−"}${fmt(Math.abs(l.delta))}</td><td style="white-space:normal">${esc(l.reason)}</td></tr>`).join("") || '<tr><td colspan="4" style="color:var(--dim)">Nothing yet</td></tr>';
+}
+Promise.all([loadSettings(), loadUsers(), loadActivity()]).catch((e) => say(e.message, true));
+setInterval(() => loadActivity().catch(() => {}), 15000);
+</script>
+</body>
+</html>

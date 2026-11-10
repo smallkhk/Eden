@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20.12" },
+  "engines": { "node": ">=22.13" },
   "scripts": {
     "build": "esbuild src/app.js --bundle --format=esm --target=es2020 --minify --outfile=public/app.js",
     "start": "node server.js"

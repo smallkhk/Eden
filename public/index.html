@@ -14,12 +14,15 @@
   header h1 { font-size:17px; margin:0; letter-spacing:.2px; }
   .pill { font-size:12px; padding:3px 10px; border-radius:999px; background:var(--line); color:var(--dim); }
   .pill.ok { background:rgba(46,204,143,.15); color:var(--ok); }
+  #userBox { display:flex; align-items:center; gap:10px; font-size:13px; color:var(--dim); }
+  #userBox a { color:var(--acc); text-decoration:none; }
+  button.link { background:none; border:0; color:var(--dim); padding:4px; font-size:13px; text-decoration:underline; }
   #stats { margin-left:auto; font:12px ui-monospace,Menlo,Consolas,monospace; color:var(--dim); text-align:right; }
   main { display:grid; grid-template-columns:320px 1fr; gap:16px; padding:16px; max-width:1500px; margin:0 auto; }
   .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px; }
   label { display:block; font-size:12px; color:var(--dim); margin:12px 0 6px; text-transform:uppercase; letter-spacing:.6px; }
   label:first-child { margin-top:0; }
-  select, textarea, input[type=password] { width:100%; background:#0e1118; color:var(--text); border:1px solid var(--line); border-radius:10px; padding:10px; font:inherit; }
+  select, textarea, input[type=password], input[type=text] { width:100%; background:#0e1118; color:var(--text); border:1px solid var(--line); border-radius:10px; padding:10px; font:inherit; }
   textarea { min-height:92px; resize:vertical; }
   .row { display:flex; align-items:center; gap:8px; margin-top:10px; font-size:14px; color:var(--text); }
   .row input { accent-color:var(--acc); }
@@ -45,16 +48,20 @@
   #gate[hidden] { display:none; }
   #gate .panel { width:min(340px,90vw); }
   #pwErr { color:var(--bad); font-size:13px; min-height:18px; margin-top:8px; }
-  @media (max-width:900px) { main { grid-template-columns:1fr; } .stage { grid-template-columns:1fr; } #stats { display:none; } }
+  @media (max-width:900px) { main { grid-template-columns:1fr; } .stage { grid-template-columns:1fr; } #stats { display:none; } #userBox { margin-left:auto; } #who { display:none; } }
 </style>
 </head>
 <body>
 <div id="gate" hidden>
   <div class="panel">
-    <label for="pw">Access password</label>
+    <h2 id="authTitle" style="margin:0 0 4px;font-size:17px">Log in</h2>
+    <label for="au">Username</label>
+    <input id="au" type="text" autocomplete="username" autocapitalize="none" spellcheck="false">
+    <label for="pw">Password</label>
     <input id="pw" type="password" autocomplete="current-password">
     <div id="pwErr"></div>
-    <button id="pwBtn" class="primary" style="width:100%">Enter</button>
+    <button id="pwBtn" class="primary" style="width:100%">Log in</button>
+    <button id="authSwap" class="link" style="width:100%;margin-top:8px">New here? Create an account</button>
   </div>
 </div>
 
@@ -62,6 +69,12 @@
   <h1>LiveChar</h1>
   <span id="status" class="pill">idle</span>
   <div id="stats"></div>
+  <div id="userBox" hidden>
+    <span class="pill ok" title="Balance">⏱ <span id="bal">0s</span></span>
+    <span id="who"></span>
+    <a id="adminLink" href="/admin" hidden>Admin</a>
+    <button id="logout" class="link">Log out</button>
+  </div>
 </header>
 
 <main>
@@ -72,7 +85,6 @@
       <option value="eden-5b">Eden Live 5B — 720p @ 24fps</option>
       <option value="eden-14b">Eden Live 14B — 480p @ 16fps</option>
     </select>
-    <div class="row" id="fastRow"><input id="fast" type="checkbox" checked><span>Fast mode (lower latency, 2× cost)</span></div>
 
     <label for="rot">Camera orientation</label>
     <div class="row" style="margin-top:0;gap:8px">

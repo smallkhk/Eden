@@ -8,22 +8,30 @@ Webcam in, character out, in real time. Three engines, switchable in the UI:
 | Eden Live 5B | fal.ai | 1280x704 @ 24fps | $0.0035/s |
 | Eden Live 14B | fal.ai | 832x480 @ 16fps | $0.01/s |
 
-## Run (EC2 / Ubuntu, Node 20.12+)
+## Run (Ubuntu VPS, Node 22.13+)
 
-    npm install
-    cp .env.example .env      # fill FAL_KEY, DECART_API_KEY, APP_PASSWORD
-    npm start                 # or: pm2 start server.js --name livechar
+    npm install --omit=dev
+    PORT=3210 pm2 start server.js --name livechar
 
-`public/app.js` is prebuilt. After editing `src/app.js`: `npm run build`.
+Open the site and **register straight away: the first account becomes the admin.**
+Then go to **Admin** (top right) and paste the fal.ai and Decart keys. No keys go in `.env`.
 
-Camera access needs HTTPS — put it behind Nginx + Let's Encrypt:
+`public/app.js` is prebuilt. After editing `src/app.js`: `npm install && npm run build`.
 
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        client_max_body_size 12m;
-    }
+Camera access needs HTTPS — put it behind Nginx + Let's Encrypt (`client_max_body_size 12m`).
+
+## Accounts, balance and admin
+
+- Anyone can create an account (switch sign-ups off in Admin). New accounts start at 0 unless you set free sign-up seconds.
+- Balance is in **seconds**. A live session takes `rate` balance-seconds per second of video; rates are per engine (default 1).
+- Billing starts when the output video appears (connecting is free for up to 20s, so a failed connection costs nothing),
+  is charged every 5s, and stops on Stop, when the balance hits 0, or at the max session length.
+- Admin: API keys, rates, max session length, sign-up bonus, users (add/remove seconds, reset password, disable, make admin),
+  recent sessions and balance history.
+- Data lives in `data/livechar.db` (SQLite). Back that file up.
+
+Limits to know: the video runs browser-to-provider, so the server meters by clock and heartbeat. Lucy sessions are
+hard-capped by Decart to the seconds the user can pay for. Eden sessions are capped by the app only.
 
 ## How each engine takes the character
 
@@ -34,12 +42,13 @@ Camera access needs HTTPS — put it behind Nginx + Let's Encrypt:
 
 ## Files
 
-    server.js          Express: login gate, Decart token, fal proxy, first-frame
+    server.js          Express: accounts, billing, admin API, Decart token, fal proxy, first-frame
+    public/admin.html  admin panel
     src/app.js         frontend source
     public/            index.html + bundled app.js
 
 Keys never reach the browser: Decart uses 60s client tokens, fal goes through `/api/fal/proxy`
-(locked to the two Eden endpoints). `MAX_SESSION_SECONDS` caps each session.
+(locked to the two Eden endpoints, and only during a paid session).
 
 ## Windows desktop app (`desktop/`)
 

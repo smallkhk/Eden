@@ -4,8 +4,9 @@ import { wma } from "@fal-ai/client/realtime";
 
 const $ = (id) => document.getElementById(id);
 const ui = {
-  gate: $("gate"), pw: $("pw"), pwBtn: $("pwBtn"), pwErr: $("pwErr"),
-  engine: $("engine"), fast: $("fast"), fastRow: $("fastRow"), expand: $("expand"),
+  gate: $("gate"), authTitle: $("authTitle"), au: $("au"), pw: $("pw"), pwBtn: $("pwBtn"), pwErr: $("pwErr"), authSwap: $("authSwap"),
+  who: $("who"), bal: $("bal"), adminLink: $("adminLink"), logout: $("logout"), userBox: $("userBox"),
+  engine: $("engine"), expand: $("expand"),
   file: $("file"), thumb: $("thumb"), clearImg: $("clearImg"), prompt: $("prompt"),
   start: $("start"), stop: $("stop"), apply: $("apply"), mirror: $("mirror"),
   vcamRow: $("vcamRow"), vcam: $("vcam"), vcamHint: $("vcamHint"),
@@ -24,7 +25,10 @@ const ENGINES = {
 const LUCY_SWAP = "Substitute the character in the video with the person in the reference image.";
 const EDEN_SWAP = "The character from the reference image, same pose and framing as the camera, natural lighting, detailed, consistent identity.";
 
-let cfg = { maxSessionSeconds: 300, lucyModel: "lucy-latest", engines: {} };
+let cfg = { maxSessionSeconds: 300, lucyModel: "lucy-latest", lucyFast: true, engines: {}, rates: {} };
+let bill = null;       // paid session { id, timer }
+const fmtBal = (s) => { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return (h ? h + "h " : "") + (h || m ? m + "m " : "") + (s % 60) + "s"; };
+const setBalance = (b) => { if (b != null) ui.bal.textContent = fmtBal(b); };
 let cam = null;        // raw camera stream
 let run = null;        // active session { kind, stop(), apply() }
 let refBlob = null;    // character reference (JPEG blob)
@@ -38,6 +42,7 @@ const setStats = (o) => { ui.stats.textContent = Object.entries(o).filter(([, v]
 async function api(path, body) {
   const r = await fetch(path, { method: body ? "POST" : "GET", headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && path !== "/api/login" && path !== "/api/register") showAuth();
   if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
   return j;
 }
@@ -108,6 +113,7 @@ function exactStream(w, h, fps) {
   return { stream, canvas: c };
 }
 function showOutput(stream) {
+  goLive();
   ui.outV.srcObject = stream;
   const tryPlay = (n = 0) => ui.outV.play().catch(() => n < 10 && setTimeout(() => tryPlay(n + 1), 300));
   tryPlay();
@@ -121,7 +127,7 @@ async function startLucy() {
   const [w, h] = isPortrait() ? [model.height, model.width] : [model.width, model.height];
   const { stream } = exactStream(w, h, fps);
   const client = createDecartClient({
-    apiKeyProvider: async () => (await api("/api/decart-token", {})).apiKey,
+    apiKeyProvider: async () => (await api("/api/decart-token", { id: bill?.id })).apiKey,
   });
 
   const text = ui.prompt.value.trim() || (refBlob ? LUCY_SWAP : "");
@@ -129,7 +135,7 @@ async function startLucy() {
   if (text) initialState.prompt = { text, enhance: ui.expand.checked };
   if (refBlob) initialState.image = refBlob;
 
-  const wantFast = ui.fast.checked && model.supportedSpeeds?.includes("fast");
+  const wantFast = cfg.lucyFast && model.supportedSpeeds?.includes("fast");
   const t0 = performance.now();
   const rt = await client.realtime.connect(stream, {
     model,
@@ -165,7 +171,8 @@ async function edenFirstFrame(eng, canvas) {
   setStatus("building look…");
   const frame = canvas.toDataURL("image/jpeg", 0.85);
   const character = await blobToDataUrl(refBlob);
-  const { url } = await api("/api/first-frame", { frame, character, prompt: ui.prompt.value.trim(), width: eng.w, height: eng.h });
+  const { url, balance } = await api("/api/first-frame", { frame, character, prompt: ui.prompt.value.trim(), width: eng.w, height: eng.h });
+  setBalance(balance);
   return url;
 }
 
@@ -234,15 +241,32 @@ async function startEden(eng) {
 
 // ---------- control ----------
 let capTimeout = null;
+// Billing starts when the first output frame arrives (or 20s after start, whichever is first).
+function goLive() {
+  const b = bill;
+  if (!b || b.live) return;
+  b.live = true; clearTimeout(b.fallback);
+  api("/api/session/live", { id: b.id }).catch(() => {});
+  b.timer = setInterval(async () => {
+    try {
+      const r = await api("/api/session/beat", { id: b.id });
+      setBalance(r.balance);
+      if (r.ended && bill === b) stopAll(r.balance <= 0 ? "Balance finished — top up to continue" : "Session time limit reached");
+    } catch {}
+  }, 5000);
+}
 async function startAll() {
   if (run) return;
   const eng = ENGINES[ui.engine.value];
   ui.start.disabled = true; setNote(""); setStats({}); setStatus("starting…");
   try {
+    // open the paid session first: the server sets how long it may run
+    const s = await api("/api/session/start", { engine: ui.engine.value });
+    bill = { id: s.id, timer: null, live: false, fallback: setTimeout(goLive, 20000) }; setBalance(s.balance);
     run = eng.kind === "lucy" ? await startLucy() : await startEden(eng);
     refDirty = false;
-    ui.stop.disabled = false; ui.apply.disabled = false; ui.engine.disabled = true; ui.fast.disabled = true; ui.orient.disabled = true;
-    capTimeout = setTimeout(() => stopAll("Session time limit reached"), cfg.maxSessionSeconds * 1000);
+    ui.stop.disabled = false; ui.apply.disabled = false; ui.engine.disabled = true; ui.orient.disabled = true;
+    capTimeout = setTimeout(() => stopAll("Session time limit reached"), s.maxSeconds * 1000);
   } catch (e) {
     console.error(e);
     await stopAll(e?.name === "NotAllowedError" ? "Camera permission denied" : (e?.message || "Could not start"));
@@ -251,10 +275,12 @@ async function startAll() {
 async function stopAll(reason = "") {
   clearTimeout(capTimeout);
   const r = run; run = null;
+  const b = bill; bill = null;
+  if (b) { clearInterval(b.timer); clearTimeout(b.fallback); api("/api/session/stop", { id: b.id }).then((x) => setBalance(x.balance)).catch(() => {}); }
   try { await r?.stop(); } catch {}
   closeCamera();
   ui.outV.srcObject = null;
-  ui.start.disabled = false; ui.stop.disabled = true; ui.apply.disabled = true; ui.engine.disabled = false; ui.fast.disabled = false;
+  ui.start.disabled = false; ui.stop.disabled = true; ui.apply.disabled = true; ui.engine.disabled = false;
   ui.orient.disabled = ENGINES[ui.engine.value].kind !== "lucy";
   setStatus("idle"); if (reason) setNote(reason);
 }
@@ -280,7 +306,6 @@ ui.clearImg.addEventListener("click", () => {
 });
 function syncEngine() {
   const lucy = ENGINES[ui.engine.value].kind === "lucy";
-  ui.fastRow.hidden = !lucy;
   ui.orient.disabled = !lucy || !!run;          // Eden Live is landscape only
   document.body.classList.toggle("portrait", isPortrait());
   if (window.livecharDesktop?.vcam?.active()) restartVcam();
@@ -292,7 +317,10 @@ ui.start.addEventListener("click", startAll);
 ui.stop.addEventListener("click", () => stopAll());
 ui.apply.addEventListener("click", applyAll);
 ui.prompt.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) applyAll(); });
-window.addEventListener("pagehide", () => { run?.stop(); closeCamera(); });
+window.addEventListener("pagehide", () => {
+  if (bill) navigator.sendBeacon("/api/session/stop", JSON.stringify({ id: bill.id }));
+  run?.stop(); closeCamera();
+});
 
 // ---------- output zoom (scroll over the output; drag to move) ----------
 const desk = window.livecharDesktop?.vcam;
@@ -347,23 +375,46 @@ if (desk) {
   });
 }
 
-async function login() {
-  ui.pwErr.textContent = "";
-  try { await api("/api/login", { password: ui.pw.value }); ui.gate.hidden = true; await boot(); }
-  catch (e) { ui.pwErr.textContent = e.message; }
+// ---------- accounts ----------
+let authMode = "login";
+function showAuth(mode = authMode) {
+  authMode = mode;
+  const reg = mode === "register";
+  ui.authTitle.textContent = !cfg.hasUsers ? "Create the admin account" : reg ? "Create account" : "Log in";
+  ui.pwBtn.textContent = reg ? "Create account" : "Log in";
+  ui.authSwap.textContent = reg ? "Have an account? Log in" : "New here? Create an account";
+  ui.authSwap.hidden = !cfg.hasUsers || (!reg && !cfg.allowSignup);
+  ui.pw.autocomplete = reg ? "new-password" : "current-password";
+  ui.gate.hidden = false;
 }
-ui.pwBtn.addEventListener("click", login);
-ui.pw.addEventListener("keydown", (e) => e.key === "Enter" && login());
+async function submitAuth() {
+  ui.pwErr.textContent = "";
+  try {
+    await api(authMode === "register" ? "/api/register" : "/api/login", { username: ui.au.value.trim(), password: ui.pw.value });
+    ui.pw.value = ""; ui.gate.hidden = true; await boot();
+  } catch (e) { ui.pwErr.textContent = e.message; }
+}
+ui.pwBtn.addEventListener("click", submitAuth);
+ui.pw.addEventListener("keydown", (e) => e.key === "Enter" && submitAuth());
+ui.au.addEventListener("keydown", (e) => e.key === "Enter" && ui.pw.focus());
+ui.authSwap.addEventListener("click", () => { ui.pwErr.textContent = ""; showAuth(authMode === "register" ? "login" : "register"); });
+ui.logout.addEventListener("click", async () => { await stopAll(); await api("/api/logout", {}).catch(() => {}); location.reload(); });
 
+const LABELS = { lucy: "Decart Lucy — 720p, fastest", "eden-5b": "Eden Live 5B — 720p @ 24fps", "eden-14b": "Eden Live 14B — 480p @ 16fps" };
 async function boot() {
   cfg = await api("/api/config");
-  if (!cfg.authed) { ui.gate.hidden = false; return; }
+  if (!cfg.user) { ui.userBox.hidden = true; showAuth(cfg.hasUsers ? "login" : "register"); return; }
+  ui.gate.hidden = true; ui.userBox.hidden = false;
+  ui.who.textContent = cfg.user.username; setBalance(cfg.user.balance); ui.adminLink.hidden = !cfg.user.isAdmin;
   for (const o of ui.engine.options) {
     const on = ENGINES[o.value].kind === "lucy" ? cfg.engines.lucy : cfg.engines.eden;
-    o.disabled = !on; if (!on) o.textContent += " (no key)";
+    const rate = cfg.rates[o.value];
+    o.disabled = !on;
+    o.textContent = LABELS[o.value] + (!on ? " (not set up)" : rate && rate !== 1 ? ` · ${rate}× rate` : "");
   }
   const first = [...ui.engine.options].find((o) => !o.disabled);
-  if (first) ui.engine.value = first.value; else setNote("No API keys set on the server.");
+  if (first) { if (ui.engine.selectedOptions[0]?.disabled) ui.engine.value = first.value; }
+  else setNote(cfg.user.isAdmin ? "Add your API keys in Admin to start." : "The service is not set up yet.");
   syncEngine();
   document.body.classList.toggle("mirror", ui.mirror.checked);
   setView();
