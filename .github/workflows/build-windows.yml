@@ -57,8 +57,8 @@ jobs:
         env:
           SERVER_URL: ${{ github.event.inputs.server_url || vars.LIVECHAR_URL }}
         run: |
-          $cfg = @{ url = "$env:SERVER_URL" } | ConvertTo-Json
-          Set-Content -Path desktop/config.json -Value $cfg -Encoding utf8
+          # No URL given: keep the one committed in desktop/config.json
+          if ($env:SERVER_URL) { Set-Content -Path desktop/config.json -Value (@{ url = "$env:SERVER_URL" } | ConvertTo-Json) -Encoding utf8 }
           Get-Content desktop/config.json
 
       - name: Install dependencies
