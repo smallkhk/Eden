@@ -7,6 +7,8 @@ app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-background-timer-throttling");
 app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
 app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
+// Use the graphics card for video decoding and drawing even on older drivers.
+app.commandLine.appendSwitch("ignore-gpu-blocklist");
 
 if (!app.requestSingleInstanceLock()) app.quit();
 

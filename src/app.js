@@ -212,7 +212,7 @@ async function startEden(eng) {
         cost: m.billable_units != null ? "$" + (m.billable_units * eng.price).toFixed(3) : null,
       });
       else if (m.type === "error") { setNote(`Eden: ${m.error}`); if (!m.retryable) stopAll("Error"); }
-      else if (m.type === "stream_exhausted") stopAll("Stream ended — press Start again");
+      else if (m.type === "stream_exhausted") stopAll("The stream ended. Press Go live to start again.");
     },
   });
 
@@ -324,7 +324,7 @@ async function loadChars() {
       try {
         const r = await fetch(img.src); if (!r.ok) throw new Error("Could not load that character");
         setRef(await r.blob()); ui.prompt.value = c.prompt || ""; ui.charName.value = "";
-        setNote(run ? `“${c.name}” loaded — press Apply changes live` : `“${c.name}” loaded`);
+        setNote(run ? `“${c.name}” loaded — press “Apply changes while live”` : `“${c.name}” loaded`);
       } catch (e) { setNote(e.message); }
     });
     if (!c.preset || cfg.user?.isAdmin) {
@@ -446,7 +446,7 @@ function download(blob, ext) {
 }
 function takePhoto() {
   const [W, H] = outSize(), c = document.createElement("canvas"); c.width = W; c.height = H;
-  if (!drawFramed(c.getContext("2d"), W, H)) return setNote("Start the video first, then take a photo");
+  if (!drawFramed(c.getContext("2d"), W, H)) return setNote("Go live first, then take a photo");
   c.toBlob((b) => { if (b) { download(b, "png"); setNote("Photo saved"); } }, "image/png");
 }
 let rec = null;
@@ -458,7 +458,7 @@ function stopRecording() {
 }
 function toggleRecording() {
   if (rec) return stopRecording();
-  if (!(ui.outV.readyState >= 2 && ui.outV.videoWidth)) return setNote("Start the video first, then record");
+  if (!(ui.outV.readyState >= 2 && ui.outV.videoWidth)) return setNote("Go live first, then record");
   const type = ["video/mp4;codecs=avc1.42E01E", "video/webm;codecs=vp9", "video/webm"].find((t) => window.MediaRecorder?.isTypeSupported(t));
   if (!type) return setNote("Recording is not supported in this browser");
   const [W, H] = outSize(), c = document.createElement("canvas"); c.width = W; c.height = H;
@@ -531,7 +531,7 @@ async function boot() {
   }
   const first = [...ui.engine.options].find((o) => !o.disabled);
   if (first) { if (ui.engine.selectedOptions[0]?.disabled) ui.engine.value = first.value; }
-  else setNote(cfg.user.isAdmin ? "Add your API keys in Admin to start." : "The service is not set up yet.");
+  else setNote(cfg.user.isAdmin ? "Add your API keys in Admin to go live." : "The service is not set up yet.");
   syncEngine();
   document.body.classList.toggle("mirror", ui.mirror.checked);
   setView();

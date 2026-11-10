@@ -3,53 +3,36 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="icon" href="data:,">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='12' cy='16' r='10' fill='%234fd8eb'/%3E%3Ccircle cx='20' cy='16' r='10' fill='%23ff5c8a' fill-opacity='.9'/%3E%3C/svg%3E">
 <title>LiveChar — Account</title>
+<link rel="stylesheet" href="/ui.css">
 <style>
-  :root { --bg:#0b0d12; --panel:#141821; --line:#232a38; --text:#e8ecf3; --dim:#8b95a8; --acc:#7c5cff; --ok:#2ecc8f; --bad:#ff5d6c; }
-  * { box-sizing:border-box; } [hidden] { display:none !important; }
-  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
-  header { display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--line); }
-  header h1 { font-size:17px; margin:0; } header a { margin-left:auto; color:var(--acc); text-decoration:none; font-size:14px; }
-  main { max-width:860px; margin:0 auto; padding:16px; display:grid; gap:16px; }
-  .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; }
-  h2 { font-size:15px; margin:0 0 12px; }
-  .big { font-size:30px; font-weight:650; } .dim { color:var(--dim); font-size:13px; }
-  label { display:block; font-size:12px; color:var(--dim); margin:10px 0 5px; text-transform:uppercase; letter-spacing:.6px; }
-  input[type=text], input[type=password] { width:100%; background:#0e1118; color:var(--text); border:1px solid var(--line); border-radius:10px; padding:10px; font:inherit; }
-  button { cursor:pointer; border:1px solid var(--line); background:#1b2130; color:var(--text); border-radius:10px; padding:9px 14px; font:inherit; font-size:14px; }
-  button.primary { background:var(--acc); border-color:var(--acc); color:#fff; font-weight:600; }
-  button:disabled { opacity:.5; cursor:not-allowed; }
-  .pkgs { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:10px; }
-  .pkg { text-align:left; padding:14px; border-radius:12px; }
-  .pkg.sel { border-color:var(--acc); box-shadow:0 0 0 1px var(--acc) inset; }
-  .pkg b { display:block; font-size:16px; } .pkg em { font-style:normal; color:var(--ok); font-size:18px; font-weight:650; display:block; margin-top:4px; }
-  .pkg small { color:var(--dim); }
-  .nets { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
-  .nets button.sel { border-color:var(--acc); color:#fff; background:rgba(124,92,255,.18); }
-  .pay { display:grid; grid-template-columns:220px 1fr; gap:18px; align-items:start; }
-  .pay img { width:220px; height:220px; border-radius:10px; background:#fff; }
-  .copy { display:flex; gap:8px; align-items:center; margin-top:4px; }
-  .copy code { flex:1; background:#0e1118; border:1px solid var(--line); border-radius:10px; padding:10px; font:14px ui-monospace,Menlo,Consolas,monospace; word-break:break-all; }
-  .amount code { font-size:20px; font-weight:650; color:var(--ok); }
-  .warn { background:rgba(255,190,70,.1); border:1px solid rgba(255,190,70,.3); color:#ffd27a; border-radius:10px; padding:9px 11px; font-size:13px; margin-top:10px; }
-  .row { display:flex; gap:8px; margin-top:6px; } .row input { flex:1; }
-  .msg { font-size:13px; min-height:18px; margin-top:8px; color:var(--ok); } .msg.err { color:var(--bad); }
-  .scroll { overflow-x:auto; } table { width:100%; border-collapse:collapse; font-size:14px; }
-  th { text-align:left; font-size:12px; color:var(--dim); font-weight:500; text-transform:uppercase; letter-spacing:.6px; padding:8px; border-bottom:1px solid var(--line); white-space:nowrap; }
-  td { padding:8px; border-bottom:1px solid var(--line); white-space:nowrap; } td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
-  .pos { color:var(--ok); } .neg { color:var(--bad); }
-  .two { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
-  @media (max-width:640px) { .pay, .two { grid-template-columns:1fr; } .pay img { margin:0 auto; } }
+  .balance { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; }
+  .big { font:800 clamp(38px, 7vw, 60px)/1 var(--display); letter-spacing:-.03em; color:var(--gold); }
+  .pkgs { display:grid; grid-template-columns:repeat(auto-fill, minmax(170px, 1fr)); gap:10px; }
+  .pkg { text-align:left; padding:16px; border-radius:16px; background:var(--well); }
+  .pkg.sel { border-color:var(--gold); box-shadow:0 0 0 1px var(--gold) inset; }
+  .pkg b { display:block; font:700 17px var(--display); }
+  .pkg small { color:var(--dim); font-weight:500; }
+  .pkg em { font-style:normal; color:var(--gold); font-size:19px; font-weight:800; display:block; margin-top:8px; }
+  .nets { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
+  .nets button.sel { border-color:var(--you); color:var(--you); background:rgba(79,216,235,.1); }
+  .pay { display:grid; grid-template-columns:220px 1fr; gap:22px; align-items:start; }
+  .pay img { width:220px; height:220px; border-radius:14px; background:#fff; }
+  .copy { display:flex; gap:8px; align-items:center; }
+  .copy code { flex:1; background:var(--well); border:1px solid var(--line); border-radius:12px; padding:10px 12px; font-size:14px; word-break:break-all; }
+  .amount code { font-size:22px; font-weight:700; color:var(--gold); }
+  #cancel { margin-top:6px; }
+  @media (max-width:640px) { .pay { grid-template-columns:1fr; } .pay img { margin:0 auto; } }
 </style>
 </head>
 <body>
-<header><h1>Your account</h1><a href="/">← Back to studio</a></header>
-<main>
+<header class="bar"><a class="brand" href="/"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="12" cy="16" r="10" fill="#4fd8eb"/><circle cx="20" cy="16" r="10" fill="#ff5c8a" fill-opacity=".9"/></svg>LiveChar</a><h1>Your account</h1><a class="back" href="/">Back to the studio</a></header>
+<main class="page narrow">
   <section class="panel">
-    <div class="dim">Balance</div>
+    <div class="dim">Time left</div>
     <div class="big" id="bal">–</div>
-    <div class="dim" id="who"></div>
+    <div class="dim" style="margin-top:6px">Signed in as <span id="who"></span></div>
   </section>
 
   <section class="panel" id="buyPanel">
@@ -66,14 +49,14 @@
         <div>
           <div class="dim"><span id="oPkg"></span> · <span id="oNet"></span></div>
           <label>Send exactly</label>
-          <div class="copy amount"><code id="oAmount"></code><span class="dim">USDT</span><button data-copy="oAmount">Copy</button></div>
+          <div class="copy amount"><code id="oAmount"></code><span class="dim">USDT</span> <button data-copy="oAmount">Copy</button></div>
           <label>To this address</label>
           <div class="copy"><code id="oAddr"></code><button data-copy="oAddr">Copy</button></div>
           <div class="warn">Send the exact amount, on the <b id="oNet2"></b> network only. The last digits identify your payment. If your wallet or exchange takes its fee out of the amount, add the fee on top.</div>
           <label for="txid">After paying, paste the transaction ID (hash)</label>
           <div class="row"><input id="txid" type="text" autocomplete="off" spellcheck="false" placeholder="Transaction ID"><button id="confirm" class="primary">I've paid</button></div>
           <div class="msg" id="oMsg"></div>
-          <button id="cancel" style="margin-top:6px;background:none;border:0;color:var(--dim);text-decoration:underline;padding:4px 0">Cancel this order</button>
+          <button id="cancel" class="link">Cancel this order</button>
         </div>
       </div>
     </div>
@@ -160,7 +143,7 @@ function showOrder(o) {
   $("oAmount").textContent = o.amount; $("oAddr").textContent = o.address;
   $("txid").value = o.txid; $("cancel").hidden = !!o.txid;
   if (o.note) say("oMsg", o.note, true);
-  else if (o.txid) { say("oMsg", "Checking your payment… this can take a minute."); poll = setInterval(confirmPay, 15000); }
+  else if (o.txid) { say("oMsg", "Checking your payment. Pasted the wrong ID? Correct it and press I've paid again."); poll = setInterval(confirmPay, 15000); }
   else say("oMsg", "");
 }
 $("buy").onclick = async () => {
@@ -175,7 +158,7 @@ async function confirmPay() {
   try {
     const r = await api(`/api/orders/${order.id}/confirm`, { txid: $("txid").value.trim() });
     if (r.status === "paid") { showOrder(null); await loadAccount(); say("vMsg", "Payment received — your seconds have been added."); pick.pkg = null; for (const x of $("pkgs").children) x.classList.remove("sel"); $("buy").disabled = true; }
-    else if (r.status === "pending") { say("oMsg", "Checking your payment… this can take a minute. You can leave this page; it is added automatically."); $("cancel").hidden = true; clearInterval(poll); poll = setInterval(confirmPay, 15000); }
+    else if (r.status === "pending") { say("oMsg", "Checking your payment. This can take a minute, and you can leave this page: the seconds are added automatically. Pasted the wrong ID? Correct it and press I've paid again."); $("cancel").hidden = true; clearInterval(poll); poll = setInterval(confirmPay, 15000); }
     else { clearInterval(poll); say("oMsg", r.error || "Payment could not be verified", true); $("cancel").hidden = false; }
   } catch (e) { clearInterval(poll); say("oMsg", e.message, true); }
   $("confirm").disabled = false;

@@ -3,69 +3,128 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="icon" href="data:,">
-<title>LiveChar — live AI character changer</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='12' cy='16' r='10' fill='%234fd8eb'/%3E%3Ccircle cx='20' cy='16' r='10' fill='%23ff5c8a' fill-opacity='.9'/%3E%3C/svg%3E">
+<link rel="preload" href="/fonts/bricolage-grotesque-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/ui.css">
+<title>LiveChar — become a character, live on camera</title>
 <style>
-  :root { --bg:#0b0d12; --panel:#141821; --line:#232a38; --text:#e8ecf3; --dim:#8b95a8; --acc:#7c5cff; --ok:#2ecc8f; --bad:#ff5d6c; }
-  * { box-sizing:border-box; }
-  [hidden] { display:none !important; }
-  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
-  header { display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--line); }
-  header h1 { font-size:17px; margin:0; letter-spacing:.2px; }
-  .pill { font-size:12px; padding:3px 10px; border-radius:999px; background:var(--line); color:var(--dim); }
-  .pill.ok { background:rgba(46,204,143,.15); color:var(--ok); }
-  #userBox { display:flex; align-items:center; gap:10px; font-size:13px; color:var(--dim); }
-  #userBox a { color:var(--acc); text-decoration:none; }
-  #userBox a.pill { color:var(--ok); } #userBox a#who { color:var(--dim); }
-  button.link { background:none; border:0; color:var(--dim); padding:4px; font-size:13px; text-decoration:underline; }
-  #stats { margin-left:auto; font:12px ui-monospace,Menlo,Consolas,monospace; color:var(--dim); text-align:right; }
-  main { display:grid; grid-template-columns:320px 1fr; gap:16px; padding:16px; max-width:1500px; margin:0 auto; }
-  .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px; }
-  label { display:block; font-size:12px; color:var(--dim); margin:12px 0 6px; text-transform:uppercase; letter-spacing:.6px; }
-  label:first-child { margin-top:0; }
-  select, textarea, input[type=password], input[type=text] { width:100%; background:#0e1118; color:var(--text); border:1px solid var(--line); border-radius:10px; padding:10px; font:inherit; }
-  textarea { min-height:92px; resize:vertical; }
-  .row { display:flex; align-items:center; gap:8px; margin-top:10px; font-size:14px; color:var(--text); }
-  .row input { accent-color:var(--acc); }
+  /* ---------- studio layout ---------- */
+  .bar #stats { font-size:12.5px; color:var(--dim); font-variant-numeric:tabular-nums; }
+  #userBox { margin-left:auto; display:flex; align-items:center; gap:12px; font-size:14px; }
+  #userBox a { text-decoration:none; }
+  #userBox a, #userBox button { white-space:nowrap; }
+  #userBox .topup { color:var(--gold); font-weight:700; }
+  #userBox #who { color:var(--dim); }
+
+  .studio { display:grid; grid-template-columns:372px minmax(0, 1fr); gap:20px; padding:20px; max-width:1640px; margin:0 auto; align-items:start; }
+
+  /* the rail is one surface; sections are divided, not boxed */
+  .rail { background:var(--stage); border:1px solid var(--line); border-radius:20px; overflow:hidden;
+    position:sticky; top:20px; max-height:calc(100vh - 96px); display:flex; flex-direction:column; }
+  .opts { overflow-y:auto; min-height:0; }
+  .opts section:last-child { border-bottom:0; }
+  .act { border-top:1px solid var(--line); flex:none; }
+  .rail section { padding:16px 18px; border-bottom:1px solid var(--line); }
+  .rail h2 { font-size:15px; margin-bottom:10px; }
+  .pair { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .zoomhead { display:flex; justify-content:space-between; align-items:baseline; }
+  .zoomhead output { font-variant-numeric:tabular-nums; color:var(--you); font-weight:700; font-size:13px; }
+  .check { margin:0; color:var(--text); font-weight:500; font-size:14px; }
+
+  /* character picker */
   .ref { display:flex; align-items:center; gap:10px; }
-  .ref img { width:64px; height:64px; object-fit:cover; border-radius:10px; border:1px solid var(--line); }
-  .filebtn, button { cursor:pointer; border:1px solid var(--line); background:#1b2130; color:var(--text); border-radius:10px; padding:10px 14px; font:inherit; }
+  .filebtn { flex:1; text-align:center; border-style:dashed; border-color:#4a5199; background:transparent; padding:14px; margin:0; color:var(--text); font-size:14px; }
   .filebtn input { display:none; }
-  button.primary { background:var(--acc); border-color:var(--acc); color:#fff; font-weight:600; }
-  button:disabled { opacity:.45; cursor:not-allowed; }
-  .btns { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:14px; }
-  .btns .wide { grid-column:1/-1; }
-  #outView { touch-action:none; user-select:none; }
-  #tools { position:absolute; right:10px; bottom:10px; z-index:2; display:flex; gap:6px; }
-  #tools button { padding:6px 11px; font-size:13px; background:rgba(10,12,18,.72); border-color:rgba(255,255,255,.18); }
-  #tools button.on { background:var(--bad); border-color:var(--bad); color:#fff; }
-  #chars { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-top:10px; max-height:164px; overflow-y:auto; }
-  .char { position:relative; padding:0; border-radius:10px; overflow:hidden; background:#0e1118; aspect-ratio:1; }
+  .ref img { width:56px; height:56px; object-fit:cover; border-radius:12px; border:2px solid var(--char); }
+  #chars { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-top:12px; max-height:186px; overflow-y:auto; padding:2px; }
+  .char { position:relative; padding:0; border-radius:12px; overflow:hidden; background:var(--well); aspect-ratio:1; border:1px solid var(--line); }
+  .char:hover:not(:disabled) { border-color:var(--char); }
   .char img { width:100%; height:100%; object-fit:cover; display:block; }
-  .char span { position:absolute; left:0; right:0; bottom:0; padding:2px 4px; font-size:11px; background:rgba(0,0,0,.65); color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .char i { position:absolute; top:2px; right:2px; width:18px; height:18px; line-height:17px; border-radius:50%; background:rgba(0,0,0,.7); color:#fff; font-style:normal; font-size:13px; display:none; }
+  .char span { position:absolute; left:0; right:0; bottom:0; padding:10px 5px 3px; font-size:11px; font-weight:600; text-align:left;
+    background:linear-gradient(transparent, rgba(8,9,20,.88)); color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .char i { position:absolute; top:3px; right:3px; width:19px; height:19px; line-height:18px; border-radius:50%; background:rgba(8,9,20,.78); color:#fff; font-style:normal; font-size:13px; display:none; }
   .char:hover i, .char:focus-within i { display:block; }
   @media (hover:none) { .char i { display:block; } }
-  #note { min-height:20px; margin-top:10px; font-size:13px; color:var(--dim); }
-  .stage { display:grid; grid-template-columns:1fr 1fr; gap:12px; align-content:start; }
-  .view { position:relative; background:#000; border:1px solid var(--line); border-radius:14px; overflow:hidden; aspect-ratio:16/9; }
-  .view video { width:100%; height:100%; object-fit:contain; display:block; }
+
+  /* go-live bar */
+  .act { padding:16px 18px; background:var(--raise); }
+  .btns { display:grid; grid-template-columns:1fr auto; gap:8px; }
+  #start { font-size:16px; padding:13px 18px; }
+  #stop:not(:disabled) { border-color:var(--bad); color:var(--bad); }
+  #apply { grid-column:1 / -1; }
+  #note { min-height:20px; margin-top:10px; font-size:13.5px; color:var(--dim); }
+
+  /* ---------- stage: the character is the show, you are the inset ---------- */
+  .stage { position:relative; display:grid; justify-items:center; }
+  .view { position:relative; background:#05060f; overflow:hidden; }
+  .view video { width:100%; height:100%; object-fit:contain; display:block; position:relative; }
   body.mirror .view video { transform:scaleX(-1); }
-  body.portrait .stage { justify-items:center; }
-  body.portrait .view { aspect-ratio:9/16; height:min(78vh,720px); max-width:100%; }
-  .tag { position:absolute; top:10px; left:10px; z-index:1; font-size:11px; letter-spacing:.8px; padding:3px 8px; border-radius:6px; background:rgba(0,0,0,.6); color:#fff; }
-  .hint { font-size:12px; color:var(--dim); margin-top:6px; }
-  #gate { position:fixed; inset:0; background:rgba(5,7,10,.92); display:grid; place-items:center; z-index:10; }
-  #gate[hidden] { display:none; }
-  #gate .panel { width:min(340px,90vw); }
-  #pwErr { color:var(--bad); font-size:13px; min-height:18px; margin-top:8px; }
-  @media (max-width:900px) { main { grid-template-columns:1fr; } .stage { grid-template-columns:1fr; } #stats { display:none; } #userBox { margin-left:auto; } #who { display:none; } }
+  .tag { position:absolute; top:10px; left:10px; z-index:2; font-size:11.5px; font-weight:700; padding:3px 9px; border-radius:999px; background:rgba(8,9,20,.7); }
+
+  #outView { width:100%; aspect-ratio:16 / 9; max-height:calc(100vh - 150px); border-radius:22px; border:1px solid var(--line); touch-action:none; user-select:none; }
+  #outView .tag { color:var(--char); }
+  body:has(#status.ok) #outView { border-color:var(--char); box-shadow:0 0 0 1px var(--char), 0 18px 60px -20px rgba(255,92,138,.45); }
+  .empty { position:absolute; inset:0; display:grid; place-content:center; justify-items:center; gap:6px; text-align:center; padding:24px; color:var(--dim); }
+  .empty b { font:700 clamp(20px, 2.6vw, 30px)/1.15 var(--display); color:var(--text); letter-spacing:-.02em; }
+  .empty span { max-width:34ch; font-size:14px; }
+
+  .cam { position:absolute; left:16px; bottom:16px; width:23%; min-width:120px; aspect-ratio:16 / 9; border-radius:14px; border:2px solid var(--you); box-shadow:0 10px 30px rgba(0,0,0,.5); z-index:3; }
+  .cam .tag { color:var(--you); top:6px; left:6px; }
+
+  #tools { position:absolute; right:14px; bottom:14px; z-index:2; display:flex; gap:8px; }
+  #tools button { padding:7px 13px; font-size:13px; background:rgba(8,9,20,.72); border-color:rgba(255,255,255,.2); backdrop-filter:blur(6px); }
+  #tools button.on { background:var(--bad); border-color:var(--bad); color:#fff; }
+
+  body.portrait #outView { width:auto; height:min(calc(100vh - 150px), 820px); aspect-ratio:9 / 16; max-width:100%; }
+  body.portrait .cam { width:auto; height:24%; min-width:0; aspect-ratio:9 / 16; }
+
+  /* ---------- sign in ---------- */
+  #gate { position:fixed; inset:0; z-index:20; background:var(--ink); display:grid; grid-template-columns:minmax(0, 1.15fr) minmax(340px, .85fr); overflow:auto; }
+  .hero { padding:clamp(28px, 6vw, 84px); display:flex; flex-direction:column; justify-content:center; gap:26px; }
+  .hero h1 { font-size:clamp(40px, 6.2vw, 88px); line-height:.98; letter-spacing:-.035em; font-weight:800; max-width:9ch; }
+  .hero p { font-size:clamp(16px, 1.5vw, 19px); color:var(--dim); max-width:40ch; margin:0; }
+  /* you -> character, as two frames */
+  .swap { position:relative; width:min(360px, 70%); aspect-ratio:16 / 10; }
+  .swap i { position:absolute; width:66%; height:78%; border-radius:18px; }
+  .swap i:first-child { left:0; top:0; border:2px solid var(--you); }
+  .swap i:nth-child(2) { right:0; bottom:0; background:var(--char); }
+  .swap em { position:absolute; font-style:normal; font-size:12.5px; font-weight:700; }
+  .swap em:nth-of-type(1) { left:12px; top:10px; color:var(--you); }
+  .swap em:nth-of-type(2) { right:12px; bottom:10px; color:#3a0b1c; }
+  .form { background:var(--stage); border-left:1px solid var(--line); padding:clamp(24px, 4vw, 56px); display:flex; flex-direction:column; justify-content:center; }
+  .form .inner { width:100%; max-width:360px; margin:0 auto; }
+  .form h2 { font-size:26px; margin-bottom:8px; }
+  #pwErr { color:var(--bad); font-size:13.5px; min-height:20px; margin-top:8px; }
+  #pwBtn { width:100%; font-size:16px; padding:13px; }
+  #authSwap { width:100%; margin-top:10px; }
+  #forgot { display:block; text-align:center; margin-top:6px; font-size:13px; color:var(--dim); }
+
+  @media (max-width:940px) {
+    .studio { grid-template-columns:1fr; padding:14px; }
+    .stage { order:-1; }
+    .rail { position:static; max-height:none; overflow:visible; } .opts { overflow:visible; }
+    .act { position:sticky; bottom:0; border-radius:0 0 20px 20px; z-index:5; }
+    .bar { gap:10px; padding:10px 14px; } #userBox { gap:10px; } #userBox .topup { display:none; }
+    .empty span { display:none; } .empty { padding-bottom:30%; }
+    .cam { left:10px; bottom:10px; min-width:96px; } #tools { right:10px; bottom:10px; }
+    #outView { max-height:none; }
+    .bar #stats, #userBox #who { display:none; }
+    #gate { grid-template-columns:1fr; }
+    .hero { padding-bottom:8px; } .swap { display:none; }
+    .form { border-left:0; border-top:1px solid var(--line); justify-content:flex-start; }
+  }
 </style>
 </head>
 <body>
 <div id="gate" hidden>
-  <div class="panel">
-    <h2 id="authTitle" style="margin:0 0 4px;font-size:17px">Log in</h2>
+  <div class="hero">
+    <span class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="12" cy="16" r="10" fill="#4fd8eb"/><circle cx="20" cy="16" r="10" fill="#ff5c8a" fill-opacity=".9"/></svg>LiveChar</span>
+    <h1>Become a character, live on camera.</h1>
+    <p>Pick a character or describe one. Your webcam shows them instead of you, as it happens, in the app or as a camera in other programs.</p>
+    <div class="swap" aria-hidden="true"><i></i><i></i><em>You</em><em>Character</em></div>
+  </div>
+  <div class="form"><div class="inner">
+    <h2 id="authTitle">Log in</h2>
     <label for="au" id="auLabel">Username or email</label>
     <input id="au" type="text" autocomplete="username" autocapitalize="none" spellcheck="false">
     <div id="emRow" hidden><label for="em">Email (optional, for password reset)</label>
@@ -73,82 +132,98 @@
     <label for="pw">Password</label>
     <input id="pw" type="password" autocomplete="current-password">
     <div id="pwErr"></div>
-    <button id="pwBtn" class="primary" style="width:100%">Log in</button>
-    <button id="authSwap" class="link" style="width:100%;margin-top:8px">New here? Create an account</button>
-    <a id="forgot" href="/reset" style="display:block;text-align:center;margin-top:6px;font-size:13px;color:var(--dim)">Forgot password?</a>
-  </div>
+    <button id="pwBtn" class="primary">Log in</button>
+    <button id="authSwap" class="link">New here? Create an account</button>
+    <a id="forgot" href="/reset">Forgot password?</a>
+  </div></div>
 </div>
 
-<header>
-  <h1>LiveChar</h1>
+<header class="bar">
+  <a class="brand" href="/"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="12" cy="16" r="10" fill="#4fd8eb"/><circle cx="20" cy="16" r="10" fill="#ff5c8a" fill-opacity=".9"/></svg>LiveChar</a>
   <span id="status" class="pill">idle</span>
   <div id="stats"></div>
   <div id="userBox" hidden>
-    <a href="/account" class="pill ok" title="Balance — click to top up" style="text-decoration:none">⏱ <span id="bal">0s</span> · Top up</a>
+    <a href="/account" class="pill bal" title="Your balance"><span id="bal">0s</span> left</a>
+    <a href="/account" class="topup">Top up</a>
     <a href="/account" id="who" title="Your account"></a>
     <a id="adminLink" href="/admin" hidden>Admin</a>
     <button id="logout" class="link">Log out</button>
   </div>
 </header>
 
-<main>
-  <section class="panel">
-    <label for="engine">Engine</label>
-    <select id="engine">
-      <option value="lucy">Decart Lucy — 720p, fastest</option>
-      <option value="eden-5b">Eden Live 5B — 720p @ 24fps</option>
-      <option value="eden-14b">Eden Live 14B — 480p @ 16fps</option>
-    </select>
+<main class="studio">
+  <div class="rail">
+    <div class="opts">
+    <section>
+      <h2>Character</h2>
+      <div class="ref">
+        <label class="filebtn">Upload a picture<input id="file" type="file" accept="image/jpeg,image/png,image/webp"></label>
+        <img id="thumb" alt="Chosen character" hidden>
+        <button id="clearImg" hidden>Remove</button>
+      </div>
+      <div class="hint">A clear, front-facing picture works best.</div>
+      <div id="saveRow" hidden>
+        <div class="row"><input id="charName" type="text" maxlength="40" placeholder="Name it to save it" aria-label="Character name"><button id="saveChar">Save</button></div>
+        <div class="row" id="presetRow" hidden><input id="charPreset" type="checkbox"><label for="charPreset" class="check">Save as a preset for all users</label></div>
+      </div>
+      <div id="chars" hidden></div>
+      <label for="prompt">Describe the character</label>
+      <textarea id="prompt" placeholder="Optional with a picture. For example: an elderly wizard with a long silver beard and blue robes"></textarea>
+      <div class="row"><input id="expand" type="checkbox" checked><label for="expand" class="check">Improve my description automatically</label></div>
+    </section>
 
-    <label for="rot">Camera orientation</label>
-    <div class="row" style="margin-top:0;gap:8px">
-      <select id="rot" title="Rotate the camera before it goes to the AI">
-        <option value="0">Rotate 0°</option><option value="90">Rotate 90°</option>
-        <option value="180">Rotate 180°</option><option value="270">Rotate 270°</option>
+    <section>
+      <h2>Engine</h2>
+      <select id="engine" aria-label="Engine">
+        <option value="lucy">Decart Lucy — 720p, fastest</option>
+        <option value="eden-5b">Eden Live 5B — 720p @ 24fps</option>
+        <option value="eden-14b">Eden Live 14B — 480p @ 16fps</option>
       </select>
-      <select id="orient" title="Frame shape">
-        <option value="landscape">Landscape</option><option value="portrait">Portrait</option>
-      </select>
-    </div>
-    <div class="hint">Rotation works live. Portrait is Lucy only.</div>
+    </section>
 
-    <label>Character image</label>
-    <div class="ref">
-      <label class="filebtn" style="margin:0;text-transform:none;letter-spacing:0;font-size:14px;color:var(--text)">
-        Upload<input id="file" type="file" accept="image/jpeg,image/png,image/webp">
-      </label>
-      <img id="thumb" alt="Character reference" hidden>
-      <button id="clearImg" hidden>Remove</button>
-    </div>
-    <div class="hint">Clear, front-facing, 512px or larger.</div>
-    <div id="saveRow" hidden>
-      <div class="row" style="gap:8px"><input id="charName" type="text" maxlength="40" placeholder="Name this character" aria-label="Character name" style="flex:1"><button id="saveChar">Save</button></div>
-      <div class="row" id="presetRow" hidden><input id="charPreset" type="checkbox"><span>Save as a preset for all users</span></div>
-    </div>
-    <div id="chars" hidden></div>
+    <section>
+      <h2>Camera</h2>
+      <div class="pair">
+        <select id="rot" aria-label="Rotate the camera">
+          <option value="0">No rotation</option><option value="90">Rotate 90°</option>
+          <option value="180">Rotate 180°</option><option value="270">Rotate 270°</option>
+        </select>
+        <select id="orient" aria-label="Frame shape">
+          <option value="landscape">Landscape</option><option value="portrait">Portrait</option>
+        </select>
+      </div>
+      <div class="hint">Rotation changes live. Portrait works with Lucy.</div>
+      <div class="row"><input id="mirror" type="checkbox" checked><label for="mirror" class="check">Mirror the preview</label></div>
+    </section>
 
-    <label for="prompt">Prompt</label>
-    <textarea id="prompt" placeholder="Describe the character, or leave empty to just use the image. e.g. “an elderly wizard with a long silver beard and blue robes”"></textarea>
-    <div class="row"><input id="expand" type="checkbox" checked><span>Enhance prompt</span></div>
-    <div class="row"><input id="mirror" type="checkbox" checked><span>Mirror view</span></div>
-    <label for="zoom">Output zoom <span id="zoomVal" style="text-transform:none">1.00×</span></label>
-    <div class="row" style="margin-top:0"><input id="zoom" type="range" min="1" max="4" step="0.05" value="1" style="flex:1"><button id="zoomReset">Reset</button></div>
-    <div class="hint">Scroll over the output to zoom, drag to move, double-click to reset.</div>
-    <div class="row" id="vcamRow" hidden><input id="vcam" type="checkbox"><span>Virtual camera output</span></div>
-    <div class="hint" id="vcamHint" hidden></div>
-
-    <div class="btns">
-      <button id="start" class="primary">Start</button>
-      <button id="stop" disabled>Stop</button>
-      <button id="apply" class="wide" disabled>Apply changes live</button>
+    <section>
+      <h2>Output</h2>
+      <div class="zoomhead"><label for="zoom" style="margin:0">Zoom</label><output id="zoomVal" for="zoom">1.00×</output></div>
+      <div class="row" style="margin-top:6px"><input id="zoom" type="range" min="1" max="4" step="0.05" value="1" style="flex:1"><button id="zoomReset">Reset</button></div>
+      <div class="hint">Or scroll over the video. Drag to move, double-click to reset.</div>
+      <div class="row" id="vcamRow" hidden><input id="vcam" type="checkbox"><label for="vcam" class="check">Send to virtual camera</label></div>
+      <div class="hint" id="vcamHint" hidden></div>
+    </section>
     </div>
-    <div id="note"></div>
-  </section>
+
+    <div class="act">
+      <div class="btns">
+        <button id="start" class="primary">Go live</button>
+        <button id="stop" disabled>Stop</button>
+        <button id="apply" disabled>Apply changes while live</button>
+      </div>
+      <div id="note" role="status"></div>
+    </div>
+  </div>
 
   <section class="stage">
-    <div class="view"><span class="tag">CAMERA</span><video id="inV" autoplay playsinline muted></video></div>
-    <div class="view" id="outView"><span class="tag">OUTPUT</span><video id="outV" autoplay playsinline muted></video>
-      <div id="tools"><button id="snap" title="Save a photo of the output">Photo</button><button id="rec" title="Record the output to a video file">Record</button></div></div>
+    <div class="view" id="outView">
+      <span class="tag">Character</span>
+      <div class="empty"><b>Your character appears here</b><span>Choose a character, then go live.</span></div>
+      <video id="outV" autoplay playsinline muted></video>
+      <div id="tools"><button id="snap" title="Save a photo of the output">Photo</button><button id="rec" title="Record the output to a video file">Record</button></div>
+    </div>
+    <div class="view cam"><span class="tag">You</span><video id="inV" autoplay playsinline muted></video></div>
   </section>
 </main>
 

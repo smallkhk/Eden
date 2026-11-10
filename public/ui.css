@@ -1,0 +1,84 @@
+/* LiveChar shared look. Two colours carry meaning everywhere:
+   --you (cyan) = your camera, --char (pink) = the character. Gold = time/balance. */
+@font-face { font-family:"Bricolage"; src:url("/fonts/bricolage-grotesque-latin-wght-normal.woff2") format("woff2"); font-weight:200 800; font-display:swap; }
+@font-face { font-family:"Figtree"; src:url("/fonts/figtree-latin-wght-normal.woff2") format("woff2"); font-weight:300 900; font-display:swap; }
+
+:root {
+  --ink:#0e1020; --stage:#171a33; --raise:#1f2344; --well:#101328; --line:#2c3160;
+  --text:#eef0ff; --dim:#9aa0c7; --you:#4fd8eb; --char:#ff5c8a; --gold:#ffc857; --ok:#5be3a1; --bad:#ff6b6b;
+  --go:linear-gradient(100deg, var(--you), var(--char));
+  --display:"Bricolage", "Figtree", system-ui, sans-serif;
+  --body:"Figtree", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* names used by older markup */
+  --bg:var(--ink); --panel:var(--stage); --acc:var(--you);
+  color-scheme:dark;
+}
+* { box-sizing:border-box; }
+[hidden] { display:none !important; }
+html { background:var(--ink); }
+body { margin:0; min-height:100vh; background:var(--ink); color:var(--text); font:15px/1.5 var(--body); -webkit-font-smoothing:antialiased; }
+h1, h2, h3 { font-family:var(--display); font-weight:700; letter-spacing:-.01em; margin:0; }
+a { color:var(--you); }
+code { font:13px ui-monospace, Menlo, Consolas, monospace; }
+:focus-visible { outline:2px solid var(--you); outline-offset:2px; }
+
+/* ---- top bar ---- */
+.bar { display:flex; align-items:center; gap:14px; padding:12px 20px; border-bottom:1px solid var(--line); }
+.brand { display:flex; align-items:center; gap:9px; font:800 19px/1 var(--display); letter-spacing:-.02em; color:var(--text); text-decoration:none; }
+.brand svg { width:26px; height:26px; flex:none; }
+.bar .back { margin-left:auto; font-size:14px; text-decoration:none; }
+.bar h1 { font-size:16px; font-weight:600; color:var(--dim); }
+
+/* ---- controls ---- */
+label { display:block; font-size:13px; font-weight:600; color:var(--dim); margin:12px 0 6px; }
+input[type=text], input[type=password], input[type=number], input[type=search], select, textarea {
+  width:100%; background:var(--well); color:var(--text); border:1px solid var(--line); border-radius:12px; padding:10px 12px; font:inherit;
+}
+input::placeholder, textarea::placeholder { color:#6b7199; }
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline:2px solid var(--you); outline-offset:0; border-color:transparent; }
+textarea { min-height:84px; resize:vertical; }
+input[type=checkbox] { accent-color:var(--char); width:16px; height:16px; }
+input[type=range] { accent-color:var(--you); }
+button, .filebtn { cursor:pointer; border:1px solid var(--line); background:var(--raise); color:var(--text); border-radius:12px; padding:9px 14px; font:600 14px var(--body); }
+button:hover:not(:disabled), .filebtn:hover { border-color:#4a5199; }
+button:disabled { opacity:.45; cursor:not-allowed; }
+button.primary { background:var(--go); border:0; color:#0e1020; font-weight:800; padding:11px 18px; }
+button.primary:hover:not(:disabled) { filter:brightness(1.08); }
+button.link { background:none; border:0; color:var(--dim); padding:4px; font-weight:500; font-size:13px; text-decoration:underline; }
+.hint { font-size:12.5px; color:var(--dim); margin-top:6px; }
+.dim { color:var(--dim); font-size:13px; }
+.row { display:flex; align-items:center; gap:8px; margin-top:10px; font-size:14px; }
+.row input[type=text], .row input[type=number] { flex:1; }
+
+.pill { display:inline-flex; align-items:center; gap:6px; font-size:12.5px; font-weight:600; padding:4px 11px; border-radius:999px; background:var(--raise); color:var(--dim); white-space:nowrap; }
+.pill.ok { background:rgba(255,92,138,.16); color:#ff9ab6; }
+.pill.ok::before { content:""; width:7px; height:7px; border-radius:50%; background:var(--char); animation:tally 1.4s ease-in-out infinite; }
+.pill.bal { background:rgba(255,200,87,.13); color:var(--gold); text-decoration:none; }
+@keyframes tally { 50% { opacity:.25; } }
+@media (prefers-reduced-motion:reduce) { .pill.ok::before { animation:none; } }
+
+/* ---- surfaces, tables (account + admin) ---- */
+.page { max-width:1100px; margin:0 auto; padding:20px; display:grid; gap:18px; }
+.page.narrow { max-width:860px; }
+.panel { background:var(--stage); border:1px solid var(--line); border-radius:18px; padding:20px; }
+.panel > h2 { font-size:17px; margin-bottom:14px; }
+.panel h2 + .hint { margin-top:-8px; margin-bottom:10px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:4px 14px; }
+.two { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+.scroll { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; font-size:14px; }
+th { text-align:left; font-size:12.5px; font-weight:600; color:var(--dim); padding:8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+td { padding:9px 8px; border-bottom:1px solid rgba(44,49,96,.6); vertical-align:middle; white-space:nowrap; }
+tbody tr:last-child td, tfoot td { border-bottom:0; }
+td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+td button { padding:6px 10px; font-size:13px; }
+.pos { color:var(--ok); } .neg { color:var(--bad); }
+.tag { font-size:11.5px; font-weight:600; padding:2px 8px; border-radius:999px; background:var(--raise); color:var(--dim); margin-left:6px; }
+.tag.a { background:rgba(79,216,235,.15); color:var(--you); } .tag.d { background:rgba(255,107,107,.15); color:var(--bad); }
+.msg, #msg { font-size:13.5px; min-height:20px; margin-top:10px; color:var(--ok); }
+.msg.err, #msg.err { color:var(--bad); }
+.warn { background:rgba(255,200,87,.09); border:1px solid rgba(255,200,87,.3); color:#ffdc94; border-radius:12px; padding:10px 12px; font-size:13.5px; margin-top:12px; }
+dialog { background:var(--stage); color:var(--text); border:1px solid var(--line); border-radius:18px; padding:20px; }
+dialog::backdrop { background:rgba(8,9,20,.7); }
+
+@media (max-width:640px) { .two { grid-template-columns:1fr; } .page { padding:14px; } .panel { padding:16px; } }
