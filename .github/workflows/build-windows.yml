@@ -1,0 +1,84 @@
+name: Build Windows app
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: ["desktop/**", ".github/workflows/build-windows.yml"]
+  workflow_dispatch:
+    inputs:
+      server_url:
+        description: "LiveChar server URL to bake in (https://...). Empty = ask on first run."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  SOFTCAM_REF: v1.8.1
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---- virtual camera (Softcam DirectShow filter, MIT) ----
+      - name: Checkout Softcam
+        uses: actions/checkout@v4
+        with:
+          repository: tshino/softcam
+          ref: ${{ env.SOFTCAM_REF }}
+          path: softcam-src
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Build softcam.dll (x64 + Win32)
+        working-directory: softcam-src
+        shell: pwsh
+        run: |
+          nuget restore softcam.sln
+          msbuild softcam.sln /m /t:softcam /p:Configuration=Release /p:Platform=x64
+          msbuild softcam.sln /m /t:softcam /p:Configuration=Release /p:Platform=Win32
+          New-Item -ItemType Directory -Force ../desktop/softcam/x64, ../desktop/softcam/Win32 | Out-Null
+          Copy-Item dist/bin/x64/softcam.dll   ../desktop/softcam/x64/softcam.dll
+          Copy-Item dist/bin/Win32/softcam.dll ../desktop/softcam/Win32/softcam.dll
+          Copy-Item LICENSE ../desktop/softcam/LICENSE-softcam.txt
+          Get-ChildItem -Recurse ../desktop/softcam
+
+      # ---- desktop app ----
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Bake server URL
+        shell: pwsh
+        env:
+          SERVER_URL: ${{ github.event.inputs.server_url || vars.LIVECHAR_URL }}
+        run: |
+          $cfg = @{ url = "$env:SERVER_URL" } | ConvertTo-Json
+          Set-Content -Path desktop/config.json -Value $cfg -Encoding utf8
+          Get-Content desktop/config.json
+
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
+
+      - name: Build installer
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LiveChar-Windows
+          path: desktop/dist/*.exe
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/dist/*.exe
