@@ -1,17 +1,19 @@
 {
   "name": "livechar-desktop",
   "productName": "LiveChar",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "LiveChar desktop app with virtual camera output",
   "author": "LiveChar",
   "private": true,
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win nsis --x64 --publish never"
+    "dist": "electron-builder --win nsis --x64 --publish never",
+    "release": "electron-builder --win nsis --x64 --publish always"
   },
   "dependencies": {
-    "koffi": "^3.3.7"
+    "koffi": "^3.3.7",
+    "electron-updater": "^6.8.11"
   },
   "devDependencies": {
     "electron": "^45.2.3",
@@ -20,16 +22,49 @@
   "build": {
     "appId": "app.livechar.desktop",
     "productName": "LiveChar",
-    "files": ["main.js", "preload.js", "vcam.js", "setup.html", "config.json"],
-    "asarUnpack": ["node_modules/koffi/**", "node_modules/@koromix/**"],
-    "extraResources": [{ "from": "softcam", "to": "softcam" }],
-    "win": { "target": [{ "target": "nsis", "arch": ["x64"] }] },
+    "files": [
+      "main.js",
+      "preload.js",
+      "vcam.js",
+      "setup.html",
+      "config.json",
+      "icon.png"
+    ],
+    "asarUnpack": [
+      "node_modules/koffi/**",
+      "node_modules/@koromix/**"
+    ],
+    "extraResources": [
+      {
+        "from": "softcam",
+        "to": "softcam"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
     "nsis": {
       "oneClick": false,
       "perMachine": true,
       "allowToChangeInstallationDirectory": false,
       "include": "build/installer.nsh",
       "artifactName": "LiveChar-Setup-${version}.${ext}"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "smallkhk",
+        "repo": "Eden",
+        "releaseType": "release"
+      }
+    ]
   }
 }

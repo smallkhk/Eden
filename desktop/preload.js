@@ -38,7 +38,11 @@ if (location.protocol === "file:") {
     cam = null;
   }
 
+  const hotkeyHandlers = [];
+  ipcRenderer.on("hotkey", (_e, name) => { for (const h of hotkeyHandlers) { try { h(String(name)); } catch (e) { console.error("hotkey:", e); } } });
+
   contextBridge.exposeInMainWorld("livecharDesktop", {
+    onHotkey(handler) { if (typeof handler === "function") hotkeyHandlers.push(handler); },
     vcam: {
       name: "DirectShow Softcam",
       start(videoId = "outV", w = 1280, h = 720) {

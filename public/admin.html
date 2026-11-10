@@ -19,6 +19,8 @@
   .tile b { display:block; font-size:22px; } .tile span { font-size:12px; color:var(--dim); text-transform:uppercase; letter-spacing:.6px; }
   .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
   label { display:block; font-size:12px; color:var(--dim); margin-bottom:5px; text-transform:uppercase; letter-spacing:.6px; }
+  code { font:13px ui-monospace,Menlo,Consolas,monospace; }
+  tfoot td { border-bottom:0; }
   input[type=text], input[type=password], input[type=number], input[type=search] { width:100%; background:#0e1118; color:var(--text); border:1px solid var(--line); border-radius:10px; padding:9px 10px; font:inherit; }
   .hint { font-size:12px; color:var(--dim); margin-top:4px; }
   .check { display:flex; align-items:center; gap:8px; font-size:14px; } .check input { accent-color:var(--acc); }
@@ -69,8 +71,77 @@
       <label class="check" style="text-transform:none;letter-spacing:0;color:var(--text);font-size:14px"><input id="allow_signup" type="checkbox"> Allow new sign-ups</label>
       <label class="check" style="text-transform:none;letter-spacing:0;color:var(--text);font-size:14px"><input id="lucy_fast" type="checkbox"> Lucy fast mode (Decart bills it at 2×)</label>
     </div>
+
+    <h2 style="margin-top:20px">USDT payments</h2>
+    <div class="grid">
+      <div><label for="usdt_bsc_address">Your BSC (BEP-20) address</label><input id="usdt_bsc_address" type="text" spellcheck="false" placeholder="0x…"></div>
+      <div><label for="usdt_tron_address">Your Tron (TRC-20) address</label><input id="usdt_tron_address" type="text" spellcheck="false" placeholder="T…"></div>
+      <div><label for="tron_api_key">TronGrid API key (optional)</label><input id="tron_api_key" type="password" autocomplete="off"><div class="hint" id="tronHint"></div></div>
+    </div>
+    <div class="hint">Leave an address empty to switch that network off. Payments are checked on-chain automatically; nothing else to set up.</div>
+
+    <h2 style="margin-top:20px">Email (for password reset)</h2>
+    <div class="grid">
+      <div><label for="smtp_host">SMTP host</label><input id="smtp_host" type="text" spellcheck="false" placeholder="smtp.example.com"></div>
+      <div><label for="smtp_port">SMTP port</label><input id="smtp_port" type="text" inputmode="numeric" placeholder="587"></div>
+      <div><label for="smtp_user">SMTP username</label><input id="smtp_user" type="text" spellcheck="false" autocomplete="off"></div>
+      <div><label for="smtp_pass">SMTP password</label><input id="smtp_pass" type="password" autocomplete="new-password"><div class="hint" id="smtpHint"></div></div>
+      <div><label for="smtp_from">From address</label><input id="smtp_from" type="text" spellcheck="false" placeholder="LiveChar &lt;no-reply@you.com&gt;"></div>
+      <div><label for="site_url">Site URL (for links in emails)</label><input id="site_url" type="text" spellcheck="false" placeholder="https://your-site.com"></div>
+    </div>
+    <div class="hint">Leave the host empty to switch email reset off. <button id="testMail" style="margin-left:6px">Send me a test email</button></div>
+
     <div style="margin-top:14px"><button id="save" class="primary">Save settings</button></div>
     <div id="msg"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Packages</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Name</th><th class="num">Seconds</th><th class="num">Price (USDT)</th><th>On sale</th><th></th></tr></thead>
+      <tbody id="packages"></tbody>
+      <tfoot><tr>
+        <td><input id="pkName" type="text" placeholder="e.g. 1 hour" aria-label="Package name"></td>
+        <td><input id="pkSeconds" type="number" min="1" placeholder="3600" aria-label="Seconds"></td>
+        <td><input id="pkPrice" type="number" min="0.01" step="0.01" placeholder="20" aria-label="Price in USDT"></td>
+        <td></td><td><button id="pkAdd">Add package</button></td>
+      </tr></tfoot>
+    </table></div>
+  </section>
+
+  <section class="panel">
+    <h2>Voucher codes</h2>
+    <div class="grid" style="align-items:end">
+      <div><label for="vSeconds">Seconds per code</label><input id="vSeconds" type="number" min="1" placeholder="600"></div>
+      <div><label for="vCount">How many codes</label><input id="vCount" type="number" min="1" max="200" value="1"></div>
+      <div><label for="vUses">Uses per code</label><input id="vUses" type="number" min="1" value="1"></div>
+      <div><label for="vNote">Note (optional)</label><input id="vNote" type="text" maxlength="80" placeholder="e.g. reseller Ada"></div>
+      <div><button id="vMake">Generate</button></div>
+    </div>
+    <div id="vNew" hidden style="margin-top:12px">
+      <div class="hint">New codes (copy them now):</div>
+      <textarea id="vOut" readonly rows="4" style="width:100%;background:#0e1118;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px;font:14px ui-monospace,Menlo,Consolas,monospace"></textarea>
+      <button id="vCopy">Copy all</button>
+    </div>
+    <div class="scroll" style="margin-top:12px;max-height:320px;overflow-y:auto"><table>
+      <thead><tr><th>Code</th><th class="num">Seconds</th><th class="num">Used</th><th>Note</th><th>Made</th><th></th></tr></thead>
+      <tbody id="vouchers"></tbody>
+    </table></div>
+  </section>
+
+  <section class="panel">
+    <h2>USDT orders</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>When</th><th>User</th><th>Package</th><th>Network</th><th class="num">Amount</th><th>Status</th><th></th></tr></thead>
+      <tbody id="orders"></tbody>
+    </table></div>
+    <div class="hint">“Approve” adds the seconds by hand. Use it only after you have seen the money in your own wallet, e.g. when a buyer sent the wrong amount.</div>
+  </section>
+
+  <section class="panel">
+    <h2>Preset characters</h2>
+    <div id="presets" style="display:flex;flex-wrap:wrap;gap:10px"></div>
+    <div class="hint">To add one: in the studio, upload an image, tick “Save as a preset for all users”, and press Save.</div>
   </section>
 
   <section class="panel">
@@ -90,6 +161,12 @@
     </table></div>
   </section>
 
+  <dialog id="pwDlg" style="background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:14px;padding:18px;width:min(340px,90vw)">
+    <h2 id="pwTitle">Reset password</h2>
+    <label for="pwNew">New password (6+ characters)</label><input id="pwNew" type="password" autocomplete="new-password">
+    <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end"><button id="pwCancel">Cancel</button><button id="pwOk" class="primary" style="font-size:14px;padding:8px 14px">Save</button></div>
+  </dialog>
+
   <section class="panel">
     <h2>Balance history</h2>
     <div class="scroll"><table>
@@ -104,6 +181,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fmt = (s) => { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return (h ? h + "h " : "") + (h || m ? m + "m " : "") + (s % 60) + "s"; };
 const when = (t) => new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+const TEXTS = ["usdt_bsc_address", "usdt_tron_address", "smtp_host", "smtp_port", "smtp_user", "smtp_from", "site_url"];
 const NUMS = ["rate_lucy", "rate_eden_5b", "rate_eden_14b", "first_frame_fee", "max_session_seconds", "signup_bonus"];
 
 async function api(path, body) {
@@ -118,6 +196,9 @@ function say(text, err) { $("msg").textContent = text; $("msg").className = err 
 async function loadSettings() {
   const s = await api("/api/admin/settings");
   for (const k of NUMS) $(k).value = s[k];
+  for (const k of TEXTS) $(k).value = s[k] || "";
+  $("tronHint").textContent = s.tron_api_key_hint ? "Current: " + s.tron_api_key_hint : "Not needed unless checks get rate-limited";
+  $("smtpHint").textContent = s.smtp_pass_hint ? "Current: " + s.smtp_pass_hint : "";
   $("allow_signup").checked = s.allow_signup; $("lucy_fast").checked = s.lucy_fast;
   $("falHint").textContent = s.fal_key_hint ? "Current: " + s.fal_key_hint : "No key saved yet";
   $("decartHint").textContent = s.decart_key_hint ? "Current: " + s.decart_key_hint : "No key saved yet";
@@ -125,9 +206,10 @@ async function loadSettings() {
   $("decart_key").placeholder = s.decart_key_hint ? "Paste a new key to replace it" : "Paste your Decart key";
 }
 $("save").onclick = async () => {
-  const body = { allow_signup: $("allow_signup").checked, lucy_fast: $("lucy_fast").checked, fal_key: $("fal_key").value, decart_key: $("decart_key").value };
+  const body = { allow_signup: $("allow_signup").checked, lucy_fast: $("lucy_fast").checked, fal_key: $("fal_key").value, decart_key: $("decart_key").value, tron_api_key: $("tron_api_key").value, smtp_pass: $("smtp_pass").value };
   for (const k of NUMS) body[k] = $(k).value;
-  try { await api("/api/admin/settings", body); $("fal_key").value = ""; $("decart_key").value = ""; await loadSettings(); say("Settings saved"); }
+  for (const k of TEXTS) body[k] = $(k).value;
+  try { await api("/api/admin/settings", body); for (const k of ["fal_key", "decart_key", "tron_api_key", "smtp_pass"]) $(k).value = ""; await loadSettings(); say("Settings saved"); }
   catch (e) { say(e.message, true); }
 };
 
@@ -135,7 +217,7 @@ async function loadUsers() {
   const { users } = await api("/api/admin/users?q=" + encodeURIComponent($("search").value.trim()));
   $("users").innerHTML = users.map((u) => `
     <tr data-id="${u.id}" data-name="${esc(u.username)}">
-      <td>${esc(u.username)}${u.is_admin ? '<span class="tag a">admin</span>' : ""}${u.disabled ? '<span class="tag d">disabled</span>' : ""}</td>
+      <td>${esc(u.username)}${u.email ? `<div class="hint" style="margin:0">${esc(u.email)}</div>` : ""}${u.is_admin ? '<span class="tag a">admin</span>' : ""}${u.disabled ? '<span class="tag d">disabled</span>' : ""}</td>
       <td class="num">${fmt(u.balance)}</td>
       <td class="num">${fmt(u.used)}</td>
       <td><div class="add"><input type="number" step="1" placeholder="e.g. 600" aria-label="Seconds to add for ${esc(u.username)}"><button data-act="add">Apply</button></div></td>
@@ -153,7 +235,7 @@ $("users").addEventListener("click", async (e) => {
       await api(`/api/admin/users/${id}/balance`, { delta });
       say(`${delta > 0 ? "Added" : "Removed"} ${Math.abs(delta)}s ${delta > 0 ? "to" : "from"} ${u.username}`);
     } else if (btn.dataset.act === "pw") {
-      const password = prompt(`New password for ${u.username} (6+ characters)`); if (!password) return;
+      const password = await askPassword(u.username); if (!password) return;
       await api(`/api/admin/users/${id}`, { password }); say(`Password changed for ${u.username}`);
     } else if (btn.dataset.act === "toggle") {
       await api(`/api/admin/users/${id}`, { disabled: !u.disabled }); say(`${u.username} ${u.disabled ? "enabled" : "disabled"}`);
@@ -165,6 +247,89 @@ $("users").addEventListener("click", async (e) => {
   } catch (err) { say(err.message, true); }
   $("msg").scrollIntoView({ block: "nearest" });
 });
+function askPassword(name) {
+  return new Promise((done) => {
+    const d = $("pwDlg"); $("pwTitle").textContent = `Reset password for ${name}`; $("pwNew").value = "";
+    const close = (v) => { d.close(); $("pwOk").onclick = $("pwCancel").onclick = d.oncancel = null; done(v); };
+    $("pwOk").onclick = () => close($("pwNew").value); $("pwCancel").onclick = () => close(""); d.oncancel = () => done("");
+    d.showModal(); $("pwNew").focus();
+  });
+}
+async function del(path) { const r = await fetch(path, { method: "DELETE" }); if (!r.ok) throw new Error("Could not delete"); }
+
+// ---- packages ----
+async function loadPackages() {
+  const { packages } = await api("/api/admin/packages");
+  $("packages").innerHTML = packages.map((p) => `<tr data-id="${p.id}">
+    <td><input type="text" value="${esc(p.name)}" data-f="name" aria-label="Name"></td>
+    <td><input type="number" min="1" value="${p.seconds}" data-f="seconds" aria-label="Seconds" style="width:110px"></td>
+    <td><input type="number" min="0.01" step="0.01" value="${p.price}" data-f="price" aria-label="Price" style="width:110px"></td>
+    <td><input type="checkbox" data-f="active" ${p.active ? "checked" : ""} aria-label="On sale"></td>
+    <td><button data-act="save">Save</button> <button data-act="del">Delete</button></td></tr>`).join("") || '<tr><td colspan="5" style="color:var(--dim)">No packages yet. Add one below so users can buy seconds.</td></tr>';
+}
+$("packages").addEventListener("click", async (e) => {
+  const b = e.target.closest("button"); if (!b) return; const tr = b.closest("tr"), f = (n) => tr.querySelector(`[data-f=${n}]`);
+  try {
+    if (b.dataset.act === "del") { if (!confirm("Delete this package?")) return; await del(`/api/admin/packages/${tr.dataset.id}`); }
+    else await api("/api/admin/packages", { id: +tr.dataset.id, name: f("name").value, seconds: f("seconds").value, price: f("price").value, active: f("active").checked });
+    await loadPackages(); say("Packages updated");
+  } catch (err) { say(err.message, true); }
+});
+$("pkAdd").onclick = async () => {
+  try { await api("/api/admin/packages", { name: $("pkName").value, seconds: $("pkSeconds").value, price: $("pkPrice").value }); $("pkName").value = $("pkSeconds").value = $("pkPrice").value = ""; await loadPackages(); }
+  catch (err) { alert(err.message); }
+};
+
+// ---- vouchers ----
+async function loadVouchers() {
+  const { vouchers } = await api("/api/admin/vouchers");
+  $("vouchers").innerHTML = vouchers.map((v) => `<tr data-code="${esc(v.code)}"><td><code>${esc(v.code)}</code></td><td class="num">${fmt(v.seconds)}</td>
+    <td class="num">${v.uses} / ${v.max_uses}</td><td>${esc(v.note || "")}</td><td>${when(v.created_at)}</td><td><button data-act="del">Delete</button></td></tr>`).join("") || '<tr><td colspan="6" style="color:var(--dim)">No codes yet</td></tr>';
+}
+$("vMake").onclick = async () => {
+  try {
+    const { codes } = await api("/api/admin/vouchers", { seconds: $("vSeconds").value, count: $("vCount").value, maxUses: $("vUses").value, note: $("vNote").value });
+    $("vOut").value = codes.join("\n"); $("vNew").hidden = false; await loadVouchers();
+  } catch (err) { alert(err.message); }
+};
+$("vCopy").onclick = async () => { try { await navigator.clipboard.writeText($("vOut").value); $("vCopy").textContent = "Copied"; setTimeout(() => ($("vCopy").textContent = "Copy all"), 1500); } catch { $("vOut").select(); } };
+$("vouchers").addEventListener("click", async (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (!confirm("Delete this code? It will stop working.")) return;
+  try { await del(`/api/admin/vouchers/${encodeURIComponent(b.closest("tr").dataset.code)}`); await loadVouchers(); } catch (err) { say(err.message, true); }
+});
+
+// ---- orders ----
+async function loadOrders() {
+  const { orders } = await api("/api/admin/orders");
+  const label = (o) => o.status === "paid" ? '<span class="pos">paid</span>' : o.status === "pending" ? (o.txid ? "checking…" : "waiting for payment") : esc(o.status);
+  $("orders").innerHTML = orders.map((o) => `<tr data-id="${esc(o.id)}"><td>${when(o.created_at)}</td><td>${esc(o.username)}</td><td>${esc(o.package_name)}</td><td>${o.network === "bsc" ? "BSC" : "Tron"}</td>
+    <td class="num">${esc(o.amount)}</td><td style="white-space:normal">${label(o)}${o.note ? `<div class="hint" style="margin:0">${esc(o.note)}</div>` : ""}${o.txid ? `<div class="hint" style="margin:0;word-break:break-all">${esc(o.txid)}</div>` : ""}</td>
+    <td>${o.status === "paid" ? "" : '<button data-act="approve">Approve</button>'}</td></tr>`).join("") || '<tr><td colspan="7" style="color:var(--dim)">No orders yet</td></tr>';
+}
+$("orders").addEventListener("click", async (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (!confirm("Add the seconds for this order by hand? Only do this after checking your wallet.")) return;
+  try { await api(`/api/admin/orders/${b.closest("tr").dataset.id}/approve`, {}); await Promise.all([loadOrders(), loadUsers(), loadActivity()]); } catch (err) { say(err.message, true); }
+});
+
+// ---- presets ----
+async function loadPresets() {
+  const { characters } = await api("/api/characters");
+  const list = characters.filter((c) => c.preset);
+  $("presets").innerHTML = list.map((c) => `<div data-id="${c.id}" style="width:96px;text-align:center"><img src="/api/characters/${c.id}/image" alt="" style="width:96px;height:96px;object-fit:cover;border-radius:10px;border:1px solid var(--line)">
+    <div style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.name)}</div><button style="padding:3px 8px;font-size:12px">Delete</button></div>`).join("") || '<span style="color:var(--dim);font-size:14px">No presets yet</span>';
+}
+$("presets").addEventListener("click", async (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (!confirm("Delete this preset for everyone?")) return;
+  try { await del(`/api/characters/${b.closest("[data-id]").dataset.id}`); await loadPresets(); } catch (err) { say(err.message, true); }
+});
+$("testMail").onclick = async () => {
+  try { const r = await api("/api/admin/test-email", {}); say(`Test email sent to ${r.to}`); } catch (err) { say(err.message + " (save your settings first, and set your email on the Account page)", true); }
+  $("msg").scrollIntoView({ block: "nearest" });
+};
+
 let st; $("search").oninput = () => { clearTimeout(st); st = setTimeout(loadUsers, 250); };
 
 async function loadActivity() {
@@ -176,8 +341,8 @@ async function loadActivity() {
   $("ledger").innerHTML = a.ledger.map((l) => `<tr><td>${when(l.created_at)}</td><td>${esc(l.username)}</td>
     <td class="num ${l.delta >= 0 ? "pos" : "neg"}">${l.delta >= 0 ? "+" : "−"}${fmt(Math.abs(l.delta))}</td><td style="white-space:normal">${esc(l.reason)}</td></tr>`).join("") || '<tr><td colspan="4" style="color:var(--dim)">Nothing yet</td></tr>';
 }
-Promise.all([loadSettings(), loadUsers(), loadActivity()]).catch((e) => say(e.message, true));
-setInterval(() => loadActivity().catch(() => {}), 15000);
+Promise.all([loadSettings(), loadUsers(), loadActivity(), loadPackages(), loadVouchers(), loadOrders(), loadPresets()]).catch((e) => say(e.message, true));
+setInterval(() => { loadActivity().catch(() => {}); loadOrders().catch(() => {}); }, 15000);
 </script>
 </body>
 </html>

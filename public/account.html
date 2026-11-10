@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>LiveChar — Account</title>
+<style>
+  :root { --bg:#0b0d12; --panel:#141821; --line:#232a38; --text:#e8ecf3; --dim:#8b95a8; --acc:#7c5cff; --ok:#2ecc8f; --bad:#ff5d6c; }
+  * { box-sizing:border-box; } [hidden] { display:none !important; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:17px; margin:0; } header a { margin-left:auto; color:var(--acc); text-decoration:none; font-size:14px; }
+  main { max-width:860px; margin:0 auto; padding:16px; display:grid; gap:16px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; }
+  h2 { font-size:15px; margin:0 0 12px; }
+  .big { font-size:30px; font-weight:650; } .dim { color:var(--dim); font-size:13px; }
+  label { display:block; font-size:12px; color:var(--dim); margin:10px 0 5px; text-transform:uppercase; letter-spacing:.6px; }
+  input[type=text], input[type=password] { width:100%; background:#0e1118; color:var(--text); border:1px solid var(--line); border-radius:10px; padding:10px; font:inherit; }
+  button { cursor:pointer; border:1px solid var(--line); background:#1b2130; color:var(--text); border-radius:10px; padding:9px 14px; font:inherit; font-size:14px; }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#fff; font-weight:600; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .pkgs { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:10px; }
+  .pkg { text-align:left; padding:14px; border-radius:12px; }
+  .pkg.sel { border-color:var(--acc); box-shadow:0 0 0 1px var(--acc) inset; }
+  .pkg b { display:block; font-size:16px; } .pkg em { font-style:normal; color:var(--ok); font-size:18px; font-weight:650; display:block; margin-top:4px; }
+  .pkg small { color:var(--dim); }
+  .nets { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+  .nets button.sel { border-color:var(--acc); color:#fff; background:rgba(124,92,255,.18); }
+  .pay { display:grid; grid-template-columns:220px 1fr; gap:18px; align-items:start; }
+  .pay img { width:220px; height:220px; border-radius:10px; background:#fff; }
+  .copy { display:flex; gap:8px; align-items:center; margin-top:4px; }
+  .copy code { flex:1; background:#0e1118; border:1px solid var(--line); border-radius:10px; padding:10px; font:14px ui-monospace,Menlo,Consolas,monospace; word-break:break-all; }
+  .amount code { font-size:20px; font-weight:650; color:var(--ok); }
+  .warn { background:rgba(255,190,70,.1); border:1px solid rgba(255,190,70,.3); color:#ffd27a; border-radius:10px; padding:9px 11px; font-size:13px; margin-top:10px; }
+  .row { display:flex; gap:8px; margin-top:6px; } .row input { flex:1; }
+  .msg { font-size:13px; min-height:18px; margin-top:8px; color:var(--ok); } .msg.err { color:var(--bad); }
+  .scroll { overflow-x:auto; } table { width:100%; border-collapse:collapse; font-size:14px; }
+  th { text-align:left; font-size:12px; color:var(--dim); font-weight:500; text-transform:uppercase; letter-spacing:.6px; padding:8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  td { padding:8px; border-bottom:1px solid var(--line); white-space:nowrap; } td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .pos { color:var(--ok); } .neg { color:var(--bad); }
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:640px) { .pay, .two { grid-template-columns:1fr; } .pay img { margin:0 auto; } }
+</style>
+</head>
+<body>
+<header><h1>Your account</h1><a href="/">← Back to studio</a></header>
+<main>
+  <section class="panel">
+    <div class="dim">Balance</div>
+    <div class="big" id="bal">–</div>
+    <div class="dim" id="who"></div>
+  </section>
+
+  <section class="panel" id="buyPanel">
+    <h2>Buy seconds with USDT</h2>
+    <div id="shop">
+      <div class="pkgs" id="pkgs"></div>
+      <div class="nets" id="nets"></div>
+      <div style="margin-top:14px"><button id="buy" class="primary" disabled>Continue to payment</button></div>
+      <div class="dim" id="shopEmpty" hidden>Top-ups are not available yet. Use a voucher code, or ask the admin.</div>
+    </div>
+    <div id="order" hidden>
+      <div class="pay">
+        <img id="qr" alt="QR code of the payment address">
+        <div>
+          <div class="dim"><span id="oPkg"></span> · <span id="oNet"></span></div>
+          <label>Send exactly</label>
+          <div class="copy amount"><code id="oAmount"></code><span class="dim">USDT</span><button data-copy="oAmount">Copy</button></div>
+          <label>To this address</label>
+          <div class="copy"><code id="oAddr"></code><button data-copy="oAddr">Copy</button></div>
+          <div class="warn">Send the exact amount, on the <b id="oNet2"></b> network only. The last digits identify your payment. If your wallet or exchange takes its fee out of the amount, add the fee on top.</div>
+          <label for="txid">After paying, paste the transaction ID (hash)</label>
+          <div class="row"><input id="txid" type="text" autocomplete="off" spellcheck="false" placeholder="Transaction ID"><button id="confirm" class="primary">I've paid</button></div>
+          <div class="msg" id="oMsg"></div>
+          <button id="cancel" style="margin-top:6px;background:none;border:0;color:var(--dim);text-decoration:underline;padding:4px 0">Cancel this order</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Redeem a voucher code</h2>
+    <div class="row"><input id="code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX" aria-label="Voucher code"><button id="redeem" class="primary">Redeem</button></div>
+    <div class="msg" id="vMsg"></div>
+  </section>
+
+  <div class="two">
+    <section class="panel">
+      <h2>Change password</h2>
+      <label for="cur">Current password</label><input id="cur" type="password" autocomplete="current-password">
+      <label for="nw">New password</label><input id="nw" type="password" autocomplete="new-password">
+      <div style="margin-top:12px"><button id="pwSave">Change password</button></div>
+      <div class="msg" id="pMsg"></div>
+    </section>
+    <section class="panel">
+      <h2>Email</h2>
+      <div class="dim">Used only to reset your password.</div>
+      <label for="email">Email address</label><input id="email" type="text" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false">
+      <div style="margin-top:12px"><button id="emSave">Save email</button></div>
+      <div class="msg" id="eMsg"></div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <h2>Recent sessions</h2>
+    <div class="scroll"><table><thead><tr><th>When</th><th>Engine</th><th class="num">Length</th><th class="num">Charged</th></tr></thead><tbody id="sessions"></tbody></table></div>
+  </section>
+  <section class="panel">
+    <h2>Balance history</h2>
+    <div class="scroll"><table><thead><tr><th>When</th><th class="num">Change</th><th>Details</th></tr></thead><tbody id="ledger"></tbody></table></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmt = (s) => { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return (h ? h + "h " : "") + (h || m ? m + "m " : "") + (s % 60) + "s"; };
+const when = (t) => new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+const say = (id, text, err) => { $(id).textContent = text; $(id).className = "msg" + (err ? " err" : ""); };
+const ENGINE = { lucy: "Lucy", "eden-5b": "Eden 5B", "eden-14b": "Eden 14B" };
+
+async function api(path, body) {
+  const r = await fetch(path, { method: body ? "POST" : "GET", headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+  if (r.status === 401) { location.href = "/"; throw new Error("Please log in"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || "Something went wrong");
+  return j;
+}
+
+async function loadAccount() {
+  const a = await api("/api/account");
+  $("bal").textContent = fmt(a.user.balance); $("who").textContent = a.user.username;
+  if (document.activeElement !== $("email")) $("email").value = a.user.email;
+  $("sessions").innerHTML = a.sessions.map((s) => `<tr><td>${when(s.started_at)}</td><td>${esc(ENGINE[s.engine] || s.engine)}</td>
+    <td class="num">${fmt(((s.ended_at || s.last_beat) - s.started_at) / 1000)}</td><td class="num">${fmt(s.charged)}</td></tr>`).join("") || '<tr><td colspan="4" class="dim">No sessions yet</td></tr>';
+  $("ledger").innerHTML = a.ledger.map((l) => `<tr><td>${when(l.created_at)}</td>
+    <td class="num ${l.delta >= 0 ? "pos" : "neg"}">${l.delta >= 0 ? "+" : "−"}${fmt(Math.abs(l.delta))}</td><td style="white-space:normal">${esc(l.reason)}</td></tr>`).join("") || '<tr><td colspan="3" class="dim">Nothing yet</td></tr>';
+}
+
+// ---- buy ----
+let pick = { pkg: null, net: null }, order = null, poll = null;
+async function loadShop() {
+  const { packages, networks } = await api("/api/packages");
+  const ok = packages.length && networks.length;
+  $("shopEmpty").hidden = !!ok; $("buy").hidden = !ok;
+  if (!ok) { $("pkgs").innerHTML = ""; $("nets").innerHTML = ""; return; }
+  $("pkgs").innerHTML = packages.map((p) => `<button class="pkg" data-id="${p.id}"><b>${esc(p.name)}</b><small>${fmt(p.seconds)}</small><em>${p.price.toFixed(2)} USDT</em></button>`).join("");
+  $("nets").innerHTML = networks.map((n) => `<button data-net="${n.id}">${esc(n.label)}</button>`).join("");
+  if (networks.length === 1) { pick.net = networks[0].id; $("nets").firstChild.classList.add("sel"); }
+}
+$("pkgs").onclick = (e) => { const b = e.target.closest(".pkg"); if (!b) return; pick.pkg = +b.dataset.id; for (const x of $("pkgs").children) x.classList.toggle("sel", x === b); $("buy").disabled = !(pick.pkg && pick.net); };
+$("nets").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; pick.net = b.dataset.net; for (const x of $("nets").children) x.classList.toggle("sel", x === b); $("buy").disabled = !(pick.pkg && pick.net); };
+
+function showOrder(o) {
+  order = o; clearInterval(poll);
+  $("shop").hidden = !!o; $("order").hidden = !o;
+  if (!o) return;
+  $("qr").src = o.qr; $("oPkg").textContent = `${o.package} (${fmt(o.seconds)})`; $("oNet").textContent = o.networkLabel; $("oNet2").textContent = o.networkLabel;
+  $("oAmount").textContent = o.amount; $("oAddr").textContent = o.address;
+  $("txid").value = o.txid; $("cancel").hidden = !!o.txid;
+  if (o.note) say("oMsg", o.note, true);
+  else if (o.txid) { say("oMsg", "Checking your payment… this can take a minute."); poll = setInterval(confirmPay, 15000); }
+  else say("oMsg", "");
+}
+$("buy").onclick = async () => {
+  $("buy").disabled = true;
+  try { showOrder((await api("/api/orders", { packageId: pick.pkg, network: pick.net })).order); }
+  catch (e) { alert(e.message); }
+  $("buy").disabled = false;
+};
+async function confirmPay() {
+  if (!order) return;
+  $("confirm").disabled = true;
+  try {
+    const r = await api(`/api/orders/${order.id}/confirm`, { txid: $("txid").value.trim() });
+    if (r.status === "paid") { showOrder(null); await loadAccount(); say("vMsg", "Payment received — your seconds have been added."); pick.pkg = null; for (const x of $("pkgs").children) x.classList.remove("sel"); $("buy").disabled = true; }
+    else if (r.status === "pending") { say("oMsg", "Checking your payment… this can take a minute. You can leave this page; it is added automatically."); $("cancel").hidden = true; clearInterval(poll); poll = setInterval(confirmPay, 15000); }
+    else { clearInterval(poll); say("oMsg", r.error || "Payment could not be verified", true); $("cancel").hidden = false; }
+  } catch (e) { clearInterval(poll); say("oMsg", e.message, true); }
+  $("confirm").disabled = false;
+}
+$("confirm").onclick = confirmPay;
+$("cancel").onclick = async () => { if (order) await api(`/api/orders/${order.id}/cancel`, {}).catch(() => {}); showOrder(null); };
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-copy]"); if (!b) return;
+  try { await navigator.clipboard.writeText($(b.dataset.copy).textContent); b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy"), 1500); } catch {}
+});
+
+// ---- voucher / password / email ----
+$("redeem").onclick = async () => {
+  try { const r = await api("/api/vouchers/redeem", { code: $("code").value }); $("code").value = ""; say("vMsg", `Added ${fmt(r.seconds)} to your balance.`); await loadAccount(); }
+  catch (e) { say("vMsg", e.message, true); }
+};
+$("code").onkeydown = (e) => e.key === "Enter" && $("redeem").click();
+$("pwSave").onclick = async () => {
+  try { await api("/api/account/password", { current: $("cur").value, next: $("nw").value }); $("cur").value = $("nw").value = ""; say("pMsg", "Password changed."); }
+  catch (e) { say("pMsg", e.message, true); }
+};
+$("emSave").onclick = async () => {
+  try { await api("/api/account/email", { email: $("email").value }); say("eMsg", "Email saved."); }
+  catch (e) { say("eMsg", e.message, true); }
+};
+
+(async () => {
+  await loadAccount();
+  await loadShop();
+  showOrder((await api("/api/orders/current")).order);
+})().catch(() => {});
+</script>
+</body>
+</html>

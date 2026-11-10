@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<link rel="icon" href="data:,">
+<title>LiveChar — Reset password</title>
+<style>
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0b0d12; color:#e8ecf3; font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  [hidden] { display:none !important; }
+  .panel { width:min(380px,92vw); background:#141821; border:1px solid #232a38; border-radius:14px; padding:22px; }
+  h1 { font-size:18px; margin:0 0 6px; } p { color:#8b95a8; font-size:13px; margin:0 0 12px; }
+  label { display:block; font-size:12px; color:#8b95a8; margin:10px 0 5px; text-transform:uppercase; letter-spacing:.6px; }
+  input { width:100%; box-sizing:border-box; background:#0e1118; color:#e8ecf3; border:1px solid #232a38; border-radius:10px; padding:10px; font:inherit; }
+  button { margin-top:14px; width:100%; background:#7c5cff; border:0; color:#fff; font:600 15px system-ui; border-radius:10px; padding:11px; cursor:pointer; }
+  .msg { font-size:13px; min-height:18px; margin-top:10px; color:#2ecc8f; } .msg.err { color:#ff5d6c; }
+  a { color:#7c5cff; font-size:13px; text-decoration:none; display:block; text-align:center; margin-top:12px; }
+</style>
+</head>
+<body>
+<div class="panel">
+  <div id="ask">
+    <h1>Forgot your password?</h1>
+    <p>Enter your username or email. If the account has an email address, we'll send a reset link to it.</p>
+    <label for="login">Username or email</label><input id="login" type="text" autocomplete="username" autocapitalize="none" spellcheck="false">
+    <button id="send">Send reset link</button>
+  </div>
+  <div id="set" hidden>
+    <h1>Choose a new password</h1>
+    <label for="pw">New password</label><input id="pw" type="password" autocomplete="new-password">
+    <button id="save">Save password</button>
+  </div>
+  <div class="msg" id="msg"></div>
+  <a href="/">← Back to login</a>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const token = new URLSearchParams(location.search).get("token") || "";
+const say = (t, err) => { $("msg").textContent = t; $("msg").className = "msg" + (err ? " err" : ""); };
+async function post(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || "Something went wrong");
+}
+if (token) { $("ask").hidden = true; $("set").hidden = false; history.replaceState(null, "", "/reset"); }
+$("send").onclick = async () => {
+  if (!$("login").value.trim()) return say("Enter your username or email", true);
+  try { await post("/api/password/forgot", { login: $("login").value.trim() }); say("If that account has an email address, a reset link is on its way. Check your inbox and spam folder."); }
+  catch (e) { say(e.message, true); }
+};
+$("save").onclick = async () => {
+  try { await post("/api/password/reset", { token, password: $("pw").value }); $("set").hidden = true; say("Password changed. You can log in now."); }
+  catch (e) { say(e.message, true); }
+};
+$("login").onkeydown = (e) => e.key === "Enter" && $("send").click();
+$("pw").onkeydown = (e) => e.key === "Enter" && $("save").click();
+</script>
+</body>
+</html>

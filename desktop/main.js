@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, shell, session, dialog } = require("electron");
+const { app, BrowserWindow, Menu, Tray, ipcMain, shell, dialog, globalShortcut, nativeImage } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 
@@ -32,14 +32,27 @@ function softcamPath() {
   return path.join(base, "softcam", "x64", "softcam.dll");
 }
 
-let win = null;
+const ICON = path.join(__dirname, "icon.png");
+const HOTKEYS = [
+  ["Ctrl+Alt+S", "toggle", "Start / stop"],
+  ["Ctrl+Alt+Up", "zoomIn", "Zoom in"],
+  ["Ctrl+Alt+Down", "zoomOut", "Zoom out"],
+  ["Ctrl+Alt+0", "zoomReset", "Reset zoom"],
+  ["Ctrl+Alt+V", "vcam", "Virtual camera on / off"],
+  ["Ctrl+Alt+P", "photo", "Take a photo"],
+  ["Ctrl+Alt+R", "record", "Start / stop recording"],
+];
+const sendHotkey = (name) => win?.webContents.send("hotkey", name);
+const showWindow = () => { if (!win) return; win.show(); if (win.isMinimized()) win.restore(); win.focus(); };
+
+let win = null, tray = null, trayTipShown = false;
 function createWindow() {
   const url = serverUrl();
   const origin = url ? new URL(url).origin : "";
 
   win = new BrowserWindow({
     width: 1360, height: 820, minWidth: 900, minHeight: 600,
-    backgroundColor: "#0b0d12", title: "LiveChar", autoHideMenuBar: true,
+    backgroundColor: "#0b0d12", title: "LiveChar", autoHideMenuBar: true, icon: ICON,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true, nodeIntegration: false,
@@ -72,6 +85,14 @@ function createWindow() {
   });
 
   if (url) win.loadURL(url); else win.loadFile(path.join(__dirname, "setup.html"));
+  // Minimize goes to the tray and keeps the video + virtual camera running. Closing the window quits.
+  win.on("minimize", (ev) => {
+    ev.preventDefault(); win.hide();
+    if (!trayTipShown && process.platform === "win32") {
+      trayTipShown = true;
+      tray?.displayBalloon({ title: "LiveChar is still running", content: "It keeps working from the tray. Click the icon to bring it back." });
+    }
+  });
   win.on("closed", () => { win = null; });
 }
 
@@ -85,15 +106,49 @@ ipcMain.handle("setup:save", (_e, raw) => {
   return { ok: true };
 });
 
+function setupAutoUpdate() {
+  if (!app.isPackaged) return;
+  let autoUpdater;
+  try { ({ autoUpdater } = require("electron-updater")); } catch { return; }
+  autoUpdater.autoDownload = true;
+  autoUpdater.on("error", (e) => console.error("update:", e?.message || e));
+  autoUpdater.on("update-downloaded", async (info) => {
+    const { response } = await dialog.showMessageBox(win, {
+      type: "info", message: `LiveChar ${info.version} is ready to install`, detail: "Restart now to update? Any live session will stop.",
+      buttons: ["Restart now", "Later"], defaultId: 0, cancelId: 1,
+    });
+    if (response === 0) autoUpdater.quitAndInstall();   // "Later" installs on next quit
+  });
+  const check = () => autoUpdater.checkForUpdates().catch(() => {});
+  check(); setInterval(check, 6 * 3600000);
+}
+
 app.whenReady().then(() => {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: "LiveChar", submenu: [
       { label: "Change server…", click: () => win?.loadFile(path.join(__dirname, "setup.html")) },
+      { label: "Hotkeys…", click: () => dialog.showMessageBox(win, { type: "info", message: "Hotkeys (work even when another app is in front)", detail: HOTKEYS.map(([k, , what]) => `${k}   ${what}`).join("\n") }) },
       { label: "Reload", accelerator: "CmdOrCtrl+R", click: () => win?.webContents.reload() },
       { type: "separator" }, { role: "quit" },
     ] },
   ]));
   createWindow();
+
+  tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 16, height: 16 }));
+  tray.setToolTip("LiveChar");
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "Show LiveChar", click: showWindow },
+    { label: "Start / stop", click: () => sendHotkey("toggle") },
+    { type: "separator" }, { label: "Quit", click: () => app.quit() },
+  ]));
+  tray.on("click", showWindow);
+
+  for (const [keys, name] of HOTKEYS) {
+    try { if (!globalShortcut.register(keys, () => sendHotkey(name))) console.warn("hotkey in use by another app:", keys); }
+    catch (e) { console.warn("hotkey failed:", keys, e?.message); }
+  }
+  setupAutoUpdate();
 });
-app.on("second-instance", () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
+app.on("second-instance", showWindow);
+app.on("will-quit", () => globalShortcut.unregisterAll());
 app.on("window-all-closed", () => app.quit());

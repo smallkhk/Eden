@@ -16,6 +16,7 @@
   .pill.ok { background:rgba(46,204,143,.15); color:var(--ok); }
   #userBox { display:flex; align-items:center; gap:10px; font-size:13px; color:var(--dim); }
   #userBox a { color:var(--acc); text-decoration:none; }
+  #userBox a.pill { color:var(--ok); } #userBox a#who { color:var(--dim); }
   button.link { background:none; border:0; color:var(--dim); padding:4px; font-size:13px; text-decoration:underline; }
   #stats { margin-left:auto; font:12px ui-monospace,Menlo,Consolas,monospace; color:var(--dim); text-align:right; }
   main { display:grid; grid-template-columns:320px 1fr; gap:16px; padding:16px; max-width:1500px; margin:0 auto; }
@@ -35,6 +36,16 @@
   .btns { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:14px; }
   .btns .wide { grid-column:1/-1; }
   #outView { touch-action:none; user-select:none; }
+  #tools { position:absolute; right:10px; bottom:10px; z-index:2; display:flex; gap:6px; }
+  #tools button { padding:6px 11px; font-size:13px; background:rgba(10,12,18,.72); border-color:rgba(255,255,255,.18); }
+  #tools button.on { background:var(--bad); border-color:var(--bad); color:#fff; }
+  #chars { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-top:10px; max-height:164px; overflow-y:auto; }
+  .char { position:relative; padding:0; border-radius:10px; overflow:hidden; background:#0e1118; aspect-ratio:1; }
+  .char img { width:100%; height:100%; object-fit:cover; display:block; }
+  .char span { position:absolute; left:0; right:0; bottom:0; padding:2px 4px; font-size:11px; background:rgba(0,0,0,.65); color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .char i { position:absolute; top:2px; right:2px; width:18px; height:18px; line-height:17px; border-radius:50%; background:rgba(0,0,0,.7); color:#fff; font-style:normal; font-size:13px; display:none; }
+  .char:hover i, .char:focus-within i { display:block; }
+  @media (hover:none) { .char i { display:block; } }
   #note { min-height:20px; margin-top:10px; font-size:13px; color:var(--dim); }
   .stage { display:grid; grid-template-columns:1fr 1fr; gap:12px; align-content:start; }
   .view { position:relative; background:#000; border:1px solid var(--line); border-radius:14px; overflow:hidden; aspect-ratio:16/9; }
@@ -55,13 +66,16 @@
 <div id="gate" hidden>
   <div class="panel">
     <h2 id="authTitle" style="margin:0 0 4px;font-size:17px">Log in</h2>
-    <label for="au">Username</label>
+    <label for="au" id="auLabel">Username or email</label>
     <input id="au" type="text" autocomplete="username" autocapitalize="none" spellcheck="false">
+    <div id="emRow" hidden><label for="em">Email (optional, for password reset)</label>
+    <input id="em" type="text" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false"></div>
     <label for="pw">Password</label>
     <input id="pw" type="password" autocomplete="current-password">
     <div id="pwErr"></div>
     <button id="pwBtn" class="primary" style="width:100%">Log in</button>
     <button id="authSwap" class="link" style="width:100%;margin-top:8px">New here? Create an account</button>
+    <a id="forgot" href="/reset" style="display:block;text-align:center;margin-top:6px;font-size:13px;color:var(--dim)">Forgot password?</a>
   </div>
 </div>
 
@@ -70,8 +84,8 @@
   <span id="status" class="pill">idle</span>
   <div id="stats"></div>
   <div id="userBox" hidden>
-    <span class="pill ok" title="Balance">⏱ <span id="bal">0s</span></span>
-    <span id="who"></span>
+    <a href="/account" class="pill ok" title="Balance — click to top up" style="text-decoration:none">⏱ <span id="bal">0s</span> · Top up</a>
+    <a href="/account" id="who" title="Your account"></a>
     <a id="adminLink" href="/admin" hidden>Admin</a>
     <button id="logout" class="link">Log out</button>
   </div>
@@ -107,6 +121,11 @@
       <button id="clearImg" hidden>Remove</button>
     </div>
     <div class="hint">Clear, front-facing, 512px or larger.</div>
+    <div id="saveRow" hidden>
+      <div class="row" style="gap:8px"><input id="charName" type="text" maxlength="40" placeholder="Name this character" aria-label="Character name" style="flex:1"><button id="saveChar">Save</button></div>
+      <div class="row" id="presetRow" hidden><input id="charPreset" type="checkbox"><span>Save as a preset for all users</span></div>
+    </div>
+    <div id="chars" hidden></div>
 
     <label for="prompt">Prompt</label>
     <textarea id="prompt" placeholder="Describe the character, or leave empty to just use the image. e.g. “an elderly wizard with a long silver beard and blue robes”"></textarea>
@@ -128,7 +147,8 @@
 
   <section class="stage">
     <div class="view"><span class="tag">CAMERA</span><video id="inV" autoplay playsinline muted></video></div>
-    <div class="view" id="outView"><span class="tag">OUTPUT</span><video id="outV" autoplay playsinline muted></video></div>
+    <div class="view" id="outView"><span class="tag">OUTPUT</span><video id="outV" autoplay playsinline muted></video>
+      <div id="tools"><button id="snap" title="Save a photo of the output">Photo</button><button id="rec" title="Record the output to a video file">Record</button></div></div>
   </section>
 </main>
 

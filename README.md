@@ -26,9 +26,22 @@ Camera access needs HTTPS — put it behind Nginx + Let's Encrypt (`client_max_b
 - Balance is in **seconds**. A live session takes `rate` balance-seconds per second of video; rates are per engine (default 1).
 - Billing starts when the output video appears (connecting is free for up to 20s, so a failed connection costs nothing),
   is charged every 5s, and stops on Stop, when the balance hits 0, or at the max session length.
-- Admin: API keys, rates, max session length, sign-up bonus, users (add/remove seconds, reset password, disable, make admin),
-  recent sessions and balance history.
-- Data lives in `data/livechar.db` (SQLite). Back that file up.
+- Admin: API keys, rates, limits, USDT addresses, packages, voucher codes, orders, preset characters, email settings,
+  users (add/remove seconds, reset password, disable, make admin), sessions and balance history.
+- Data lives in `data/` (SQLite database + saved character images). Back that folder up.
+
+### Top-ups
+
+- **USDT (BEP-20 / TRC-20):** add your receiving addresses and at least one package in Admin. A buyer picks a package,
+  gets an exact amount to send (the last digits are unique to their order), pays, and pastes the transaction ID.
+  The server checks it on-chain through public endpoints and adds the seconds. It keeps checking in the background.
+  If someone sends the wrong amount, the order stays unpaid: check your wallet, then press Approve on the order.
+- **Voucher codes:** generate codes worth a number of seconds in Admin; users redeem them on their Account page.
+
+### Password reset by email
+
+Fill in the SMTP settings in Admin (and the Site URL). Users can add an email on sign-up or on their Account page.
+Without SMTP, reset passwords from the Users table in Admin.
 
 Limits to know: the video runs browser-to-provider, so the server meters by clock and heartbeat. Lucy sessions are
 hard-capped by Decart to the seconds the user can pay for. Eden sessions are capped by the app only.
@@ -45,7 +58,8 @@ hard-capped by Decart to the seconds the user can pay for. Eden sessions are cap
     server.js          Express: accounts, billing, admin API, Decart token, fal proxy, first-frame
     public/admin.html  admin panel
     src/app.js         frontend source
-    public/            index.html + bundled app.js
+    public/            index.html + bundled app.js, account.html, reset.html
+    lib/chain.js       USDT payment checks (BSC + Tron)
 
 Keys never reach the browser: Decart uses 60s client tokens, fal goes through `/api/fal/proxy`
 (locked to the two Eden endpoints, and only during a paid session).
@@ -58,6 +72,11 @@ Electron shell around the same web app, plus:
   the other app. 1280x720, fed from the output pane. Uses [Softcam](https://github.com/tshino/softcam) (MIT).
 - **Output zoom** — scroll over the output to zoom (1x–4x), drag to move, double-click to reset.
   The virtual camera gets the same framing. (Zoom also works in the browser version.)
+
+- **Hotkeys** (work while another app is in front): Ctrl+Alt+S start/stop, Ctrl+Alt+Up/Down zoom, Ctrl+Alt+0 reset zoom,
+  Ctrl+Alt+V virtual camera, Ctrl+Alt+P photo, Ctrl+Alt+R record.
+- **Tray** — minimizing sends the app to the tray and keeps the video and virtual camera running. Closing the window quits.
+- **Auto-update** — installed apps update from the latest GitHub release. To ship one: `git tag v1.2.0 && git push origin v1.2.0`.
 
 The app loads your LiveChar server, so the server must be running on HTTPS first.
 

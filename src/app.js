@@ -5,6 +5,9 @@ import { wma } from "@fal-ai/client/realtime";
 const $ = (id) => document.getElementById(id);
 const ui = {
   gate: $("gate"), authTitle: $("authTitle"), au: $("au"), pw: $("pw"), pwBtn: $("pwBtn"), pwErr: $("pwErr"), authSwap: $("authSwap"),
+  em: $("em"), emRow: $("emRow"), auLabel: $("auLabel"), forgot: $("forgot"),
+  chars: $("chars"), charName: $("charName"), saveChar: $("saveChar"), charPreset: $("charPreset"), presetRow: $("presetRow"), saveRow: $("saveRow"),
+  snap: $("snap"), rec: $("rec"), tools: $("tools"),
   who: $("who"), bal: $("bal"), adminLink: $("adminLink"), logout: $("logout"), userBox: $("userBox"),
   engine: $("engine"), expand: $("expand"),
   file: $("file"), thumb: $("thumb"), clearImg: $("clearImg"), prompt: $("prompt"),
@@ -278,6 +281,7 @@ async function stopAll(reason = "") {
   const b = bill; bill = null;
   if (b) { clearInterval(b.timer); clearTimeout(b.fallback); api("/api/session/stop", { id: b.id }).then((x) => setBalance(x.balance)).catch(() => {}); }
   try { await r?.stop(); } catch {}
+  stopRecording();
   closeCamera();
   ui.outV.srcObject = null;
   ui.start.disabled = false; ui.stop.disabled = true; ui.apply.disabled = true; ui.engine.disabled = false;
@@ -293,17 +297,60 @@ async function applyAll() {
 }
 
 // ---------- wiring ----------
+function setRef(blob) {
+  refBlob = blob; refDirty = true;
+  if (ui.thumb.src.startsWith("blob:")) URL.revokeObjectURL(ui.thumb.src);
+  if (blob) ui.thumb.src = URL.createObjectURL(blob);
+  ui.thumb.hidden = !blob; ui.clearImg.hidden = !blob; ui.saveRow.hidden = !blob;
+  if (!blob) ui.file.value = "";
+}
 ui.file.addEventListener("change", async () => {
   const f = ui.file.files[0]; if (!f) return;
   setNote("");
+  try { setRef(await fileToJpeg(f)); } catch (e) { setNote(e.message); }
+});
+ui.clearImg.addEventListener("click", () => setRef(null));
+
+// ---------- saved characters ----------
+async function loadChars() {
+  const { characters } = await api("/api/characters");
+  ui.chars.replaceChildren(...characters.map((c) => {
+    const b = document.createElement("button");
+    b.className = "char"; b.type = "button"; b.title = c.prompt ? `${c.name} — ${c.prompt}` : c.name;
+    const img = document.createElement("img"); img.src = `/api/characters/${c.id}/image`; img.alt = ""; img.loading = "lazy";
+    const n = document.createElement("span"); n.textContent = c.name;
+    b.append(img, n);
+    b.addEventListener("click", async () => {
+      try {
+        const r = await fetch(img.src); if (!r.ok) throw new Error("Could not load that character");
+        setRef(await r.blob()); ui.prompt.value = c.prompt || ""; ui.charName.value = "";
+        setNote(run ? `“${c.name}” loaded — press Apply changes live` : `“${c.name}” loaded`);
+      } catch (e) { setNote(e.message); }
+    });
+    if (!c.preset || cfg.user?.isAdmin) {
+      const x = document.createElement("i"); x.textContent = "×"; x.title = `Delete ${c.name}`; x.setAttribute("role", "button");
+      x.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (!confirm(`Delete “${c.name}”?`)) return;
+        try { await fetch(`/api/characters/${c.id}`, { method: "DELETE" }); await loadChars(); } catch (err) { setNote(err.message); }
+      });
+      b.append(x);
+    }
+    return b;
+  }));
+  ui.chars.hidden = !characters.length;
+}
+ui.saveChar.addEventListener("click", async () => {
+  if (!refBlob) return;
+  ui.saveChar.disabled = true;
   try {
-    refBlob = await fileToJpeg(f); refDirty = true;
-    ui.thumb.src = URL.createObjectURL(refBlob); ui.thumb.hidden = false; ui.clearImg.hidden = false;
+    const body = { name: ui.charName.value.trim() || "Character", prompt: ui.prompt.value.trim(), image: await blobToDataUrl(refBlob) };
+    await api(ui.charPreset.checked ? "/api/admin/presets" : "/api/characters", body);
+    ui.charName.value = ""; ui.charPreset.checked = false; setNote("Character saved"); await loadChars();
   } catch (e) { setNote(e.message); }
+  finally { ui.saveChar.disabled = false; }
 });
-ui.clearImg.addEventListener("click", () => {
-  refBlob = null; refDirty = true; ui.file.value = ""; ui.thumb.hidden = true; ui.clearImg.hidden = true;
-});
+
 function syncEngine() {
   const lucy = ENGINES[ui.engine.value].kind === "lucy";
   ui.orient.disabled = !lucy || !!run;          // Eden Live is landscape only
@@ -375,6 +422,72 @@ if (desk) {
   });
 }
 
+// ---------- photo + recording of the output (with the current zoom) ----------
+const outSize = () => (isPortrait() ? [720, 1280] : [1280, 720]);
+function drawFramed(ctx, W, H) {
+  const v = ui.outV;
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+  if (!(v.readyState >= 2 && v.videoWidth)) return false;
+  const s = Math.min(W / v.videoWidth, H / v.videoHeight), dw = v.videoWidth * s, dh = v.videoHeight * s;
+  ctx.save();
+  ctx.translate(W / 2, H / 2); ctx.scale(view.z, view.z);
+  ctx.translate(view.ox * W - W / 2, view.oy * H - H / 2);
+  ctx.drawImage(v, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  ctx.restore();
+  return true;
+}
+function download(blob, ext) {
+  const d = new Date(), p = (n) => String(n).padStart(2, "0");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `livechar-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.${ext}`;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+}
+function takePhoto() {
+  const [W, H] = outSize(), c = document.createElement("canvas"); c.width = W; c.height = H;
+  if (!drawFramed(c.getContext("2d"), W, H)) return setNote("Start the video first, then take a photo");
+  c.toBlob((b) => { if (b) { download(b, "png"); setNote("Photo saved"); } }, "image/png");
+}
+let rec = null;
+function stopRecording() {
+  if (!rec) return;
+  clearInterval(rec.draw); clearInterval(rec.clock);
+  try { rec.mr.stop(); } catch {}
+  ui.rec.textContent = "Record"; ui.rec.classList.remove("on");
+}
+function toggleRecording() {
+  if (rec) return stopRecording();
+  if (!(ui.outV.readyState >= 2 && ui.outV.videoWidth)) return setNote("Start the video first, then record");
+  const type = ["video/mp4;codecs=avc1.42E01E", "video/webm;codecs=vp9", "video/webm"].find((t) => window.MediaRecorder?.isTypeSupported(t));
+  if (!type) return setNote("Recording is not supported in this browser");
+  const [W, H] = outSize(), c = document.createElement("canvas"); c.width = W; c.height = H;
+  const ctx = c.getContext("2d"); drawFramed(ctx, W, H);
+  const mr = new MediaRecorder(c.captureStream(30), { mimeType: type, videoBitsPerSecond: 6_000_000 });
+  const chunks = [], t0 = Date.now(), r = { mr };
+  mr.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  mr.onstop = () => { rec = null; if (chunks.length) { download(new Blob(chunks, { type: type.split(";")[0] }), type.startsWith("video/mp4") ? "mp4" : "webm"); setNote("Recording saved"); } };
+  r.draw = setInterval(() => drawFramed(ctx, W, H), 1000 / 30);
+  r.clock = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); ui.rec.textContent = `Stop ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 500);
+  rec = r; mr.start(1000);
+  ui.rec.textContent = "Stop 0:00"; ui.rec.classList.add("on");
+}
+ui.snap.addEventListener("click", takePhoto);
+ui.rec.addEventListener("click", toggleRecording);
+for (const ev of ["pointerdown", "dblclick", "wheel"]) ui.tools.addEventListener(ev, (e) => e.stopPropagation());
+
+// ---------- hotkeys (desktop app; work while another app is in front) ----------
+window.livecharDesktop?.onHotkey?.((name) => {
+  if (!cfg.user) return;
+  if (name === "toggle") (run || bill) ? stopAll() : startAll();
+  else if (name === "zoomIn") setView(view.z * 1.15);
+  else if (name === "zoomOut") setView(view.z / 1.15);
+  else if (name === "zoomReset") setView(1, 0, 0);
+  else if (name === "photo") takePhoto();
+  else if (name === "record") toggleRecording();
+  else if (name === "vcam" && desk) { ui.vcam.checked = !ui.vcam.checked; ui.vcam.dispatchEvent(new Event("change")); }
+});
+
 // ---------- accounts ----------
 let authMode = "login";
 function showAuth(mode = authMode) {
@@ -385,12 +498,14 @@ function showAuth(mode = authMode) {
   ui.authSwap.textContent = reg ? "Have an account? Log in" : "New here? Create an account";
   ui.authSwap.hidden = !cfg.hasUsers || (!reg && !cfg.allowSignup);
   ui.pw.autocomplete = reg ? "new-password" : "current-password";
+  ui.emRow.hidden = !reg; ui.forgot.hidden = reg || !cfg.hasUsers;
+  ui.auLabel.textContent = reg ? "Username" : "Username or email";
   ui.gate.hidden = false;
 }
 async function submitAuth() {
   ui.pwErr.textContent = "";
   try {
-    await api(authMode === "register" ? "/api/register" : "/api/login", { username: ui.au.value.trim(), password: ui.pw.value });
+    await api(authMode === "register" ? "/api/register" : "/api/login", { username: ui.au.value.trim(), password: ui.pw.value, ...(authMode === "register" ? { email: ui.em.value.trim() } : {}) });
     ui.pw.value = ""; ui.gate.hidden = true; await boot();
   } catch (e) { ui.pwErr.textContent = e.message; }
 }
@@ -406,6 +521,8 @@ async function boot() {
   if (!cfg.user) { ui.userBox.hidden = true; showAuth(cfg.hasUsers ? "login" : "register"); return; }
   ui.gate.hidden = true; ui.userBox.hidden = false;
   ui.who.textContent = cfg.user.username; setBalance(cfg.user.balance); ui.adminLink.hidden = !cfg.user.isAdmin;
+  ui.presetRow.hidden = !cfg.user.isAdmin;
+  loadChars().catch(() => {});
   for (const o of ui.engine.options) {
     const on = ENGINES[o.value].kind === "lucy" ? cfg.engines.lucy : cfg.engines.eden;
     const rate = cfg.rates[o.value];

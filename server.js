@@ -9,6 +9,9 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { createDecartClient } from "@decartai/sdk";
 import falProxy from "@fal-ai/server-proxy";
+import QRCode from "qrcode";
+import nodemailer from "nodemailer";
+import { NETWORKS, findTransfer, toUnits, isBscAddress, isTronAddress, isTxid } from "./lib/chain.js";
 
 try { process.loadEnvFile(); } catch { /* no .env file */ }
 
@@ -38,6 +41,30 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS sessions_open ON sessions (ended_at, user_id);
 `);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS packages (
+    id INTEGER PRIMARY KEY, name TEXT NOT NULL, seconds INTEGER NOT NULL, price REAL NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1, sort INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS orders (
+    id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, package_name TEXT NOT NULL, seconds INTEGER NOT NULL,
+    network TEXT NOT NULL, amount TEXT NOT NULL, address TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+    txid TEXT, note TEXT, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, paid_at INTEGER
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS orders_txid ON orders (network, txid) WHERE txid IS NOT NULL;
+  CREATE TABLE IF NOT EXISTS vouchers (
+    code TEXT PRIMARY KEY, seconds INTEGER NOT NULL, max_uses INTEGER NOT NULL DEFAULT 1, uses INTEGER NOT NULL DEFAULT 0,
+    note TEXT, created_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS redemptions (code TEXT NOT NULL, user_id INTEGER NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (code, user_id));
+  CREATE TABLE IF NOT EXISTS characters (
+    id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT NOT NULL, prompt TEXT NOT NULL DEFAULT '', mime TEXT NOT NULL, created_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS resets (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+`);
+if (!db.prepare("PRAGMA table_info(users)").all().some((c) => c.name === "email")) db.exec("ALTER TABLE users ADD COLUMN email TEXT");
+const CHAR_DIR = path.join(DATA_DIR, "chars");
+fs.mkdirSync(CHAR_DIR, { recursive: true });
 const q = (sql) => db.prepare(sql);
 const now = () => Date.now();
 const r2 = (n) => Math.round(n * 100) / 100;
@@ -48,6 +75,8 @@ const DEFAULTS = {
   rate_lucy: "1", rate_eden_5b: "1", rate_eden_14b: "1", lucy_fast: "1",
   first_frame_fee: "0", max_session_seconds: "300", signup_bonus: "0", allow_signup: "1",
   lucy_model: "lucy-latest", first_frame_model: "fal-ai/flux-2/klein/9b/edit",
+  usdt_bsc_address: "", usdt_tron_address: "", tron_api_key: "",
+  smtp_host: "", smtp_port: "587", smtp_user: "", smtp_pass: "", smtp_from: "", site_url: "",
 };
 const realKey = (v) => (v && !/^YOUR_/i.test(v) ? v : "");
 function setting(key) {
@@ -87,7 +116,8 @@ function userFromCookie(cookieHeader) {
   const u = q(`SELECT u.* FROM auth a JOIN users u ON u.id = a.user_id WHERE a.token = ? AND a.expires_at > ?`).get(token, now());
   return u && !u.disabled ? u : null;
 }
-const pub = (u) => ({ id: u.id, username: u.username, isAdmin: !!u.is_admin, balance: r2(u.balance) });
+const pub = (u) => ({ id: u.id, username: u.username, email: u.email || "", isAdmin: !!u.is_admin, balance: r2(u.balance) });
+const cleanEmail = (v) => { const e = String(v || "").trim().toLowerCase(); return /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/.test(e) ? e : ""; };
 
 const app = express();
 app.set("trust proxy", 1);
@@ -127,10 +157,13 @@ app.post("/api/register", (req, res) => {
   if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(username)) return res.status(400).json({ error: "Username: 3-32 letters, numbers, _ . -" });
   if (password.length < 6 || password.length > 200) return res.status(400).json({ error: "Password must be at least 6 characters" });
   if (q("SELECT 1 FROM users WHERE username = ?").get(username)) return res.status(409).json({ error: "Username already taken" });
+  const rawEmail = String(req.body?.email || "").trim(), email = cleanEmail(rawEmail);
+  if (rawEmail && !email) return res.status(400).json({ error: "That email address doesn't look right" });
+  if (email && q("SELECT 1 FROM users WHERE email = ?").get(email)) return res.status(409).json({ error: "Email already in use" });
 
   const bonus = first ? 0 : Math.max(0, num("signup_bonus"));
-  const info = q("INSERT INTO users (username, pass, is_admin, balance, created_at) VALUES (?, ?, ?, ?, ?)")
-    .run(username, hashPw(password), first ? 1 : 0, bonus, now());   // first account = admin
+  const info = q("INSERT INTO users (username, pass, is_admin, balance, created_at, email) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(username, hashPw(password), first ? 1 : 0, bonus, now(), email || null);   // first account = admin
   const id = Number(info.lastInsertRowid);
   if (bonus > 0) q("INSERT INTO ledger (user_id, delta, reason, created_at) VALUES (?, ?, ?, ?)").run(id, bonus, "Signup bonus", now());
   const user = q("SELECT * FROM users WHERE id = ?").get(id);
@@ -140,7 +173,8 @@ app.post("/api/register", (req, res) => {
 
 app.post("/api/login", (req, res) => {
   if (limited(req, "login", 15, 600000)) return res.status(429).json({ error: "Too many attempts, try later" });
-  const user = q("SELECT * FROM users WHERE username = ?").get(String(req.body?.username || "").trim());
+  const login = String(req.body?.username || "").trim();
+  const user = q("SELECT * FROM users WHERE username = ?").get(login) || (cleanEmail(login) && q("SELECT * FROM users WHERE email = ?").get(cleanEmail(login)));
   if (!user || !checkPw(String(req.body?.password || ""), user.pass)) return res.status(401).json({ error: "Wrong username or password" });
   if (user.disabled) return res.status(403).json({ error: "Account disabled" });
   startAuth(req, res, user);
@@ -163,6 +197,7 @@ app.get("/api/config", (req, res) => {
     maxSessionSeconds: num("max_session_seconds"),
     lucyModel: setting("lucy_model"), lucyFast: setting("lucy_fast") === "1",
     engines: { lucy: !!setting("decart_key"), eden: !!setting("fal_key") },
+    canReset: !!setting("smtp_host"),
     rates: { lucy: num("rate_lucy"), "eden-5b": num("rate_eden_5b"), "eden-14b": num("rate_eden_14b"), firstFrame: num("first_frame_fee") },
   });
 });
@@ -336,13 +371,232 @@ app.post("/api/first-frame", requireUser, async (req, res) => {
   }
 });
 
+// ---------- email ----------
+async function sendMail(to, subject, text) {
+  if (!setting("smtp_host")) throw new Error("Email is not set up");
+  const port = Number(setting("smtp_port")) || 587;
+  const transport = nodemailer.createTransport({
+    host: setting("smtp_host"), port, secure: port === 465,
+    ...(setting("smtp_user") ? { auth: { user: setting("smtp_user"), pass: setting("smtp_pass") } } : {}),
+    connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 15000,
+  });
+  await transport.sendMail({ from: setting("smtp_from") || setting("smtp_user"), to, subject, text });
+}
+const siteUrl = (req) => setting("site_url") || `${req.protocol}://${req.get("host")}`;
+const sha = (v) => crypto.createHash("sha256").update(v).digest("hex");
+
+app.post("/api/password/forgot", async (req, res) => {
+  if (limited(req, "forgot", 5, 3600000)) return res.status(429).json({ error: "Too many attempts, try later" });
+  if (!setting("smtp_host")) return res.status(503).json({ error: "Password reset by email is not available. Ask the admin to reset it." });
+  const login = String(req.body?.login || "").trim();
+  const user = q("SELECT * FROM users WHERE username = ?").get(login) || (cleanEmail(login) && q("SELECT * FROM users WHERE email = ?").get(cleanEmail(login)));
+  if (user?.email && !user.disabled) {
+    const token = crypto.randomBytes(32).toString("hex");
+    q("DELETE FROM resets WHERE user_id = ?").run(user.id);
+    q("INSERT INTO resets (token_hash, user_id, expires_at) VALUES (?, ?, ?)").run(sha(token), user.id, now() + 3600000);
+    sendMail(user.email, "Reset your LiveChar password",
+      `Hi ${user.username},\n\nUse this link to set a new password (valid for 1 hour):\n${siteUrl(req)}/reset?token=${token}\n\nIf you didn't ask for this, ignore this email.`)
+      .catch((e) => console.error("reset email:", e?.message || e));
+  }
+  res.json({ ok: true });   // same answer whether or not the account exists
+});
+app.post("/api/password/reset", (req, res) => {
+  if (limited(req, "reset", 10, 3600000)) return res.status(429).json({ error: "Too many attempts, try later" });
+  const password = String(req.body?.password || "");
+  if (password.length < 6 || password.length > 200) return res.status(400).json({ error: "Password must be at least 6 characters" });
+  const row = q("SELECT * FROM resets WHERE token_hash = ? AND expires_at > ?").get(sha(String(req.body?.token || "")), now());
+  if (!row) return res.status(400).json({ error: "This reset link is invalid or has expired" });
+  q("UPDATE users SET pass = ? WHERE id = ?").run(hashPw(password), row.user_id);
+  q("DELETE FROM resets WHERE user_id = ?").run(row.user_id);
+  q("DELETE FROM auth WHERE user_id = ?").run(row.user_id);
+  res.json({ ok: true });
+});
+
+// ---------- account ----------
+app.get("/api/account", requireUser, (req, res) => {
+  res.json({
+    user: pub(req.user),
+    sessions: q("SELECT engine, started_at, ended_at, last_beat, charged FROM sessions WHERE user_id = ? ORDER BY started_at DESC LIMIT 30").all(req.user.id),
+    ledger: q("SELECT delta, reason, created_at FROM ledger WHERE user_id = ? ORDER BY id DESC LIMIT 50").all(req.user.id),
+    orders: q("SELECT id, package_name, seconds, network, amount, status, txid, created_at FROM orders WHERE user_id = ? AND status != 'cancelled' ORDER BY created_at DESC LIMIT 20").all(req.user.id),
+  });
+});
+app.post("/api/account/password", requireUser, (req, res) => {
+  const next = String(req.body?.next || "");
+  if (!checkPw(String(req.body?.current || ""), req.user.pass)) return res.status(400).json({ error: "Current password is wrong" });
+  if (next.length < 6 || next.length > 200) return res.status(400).json({ error: "New password must be at least 6 characters" });
+  q("UPDATE users SET pass = ? WHERE id = ?").run(hashPw(next), req.user.id);
+  q("DELETE FROM auth WHERE user_id = ? AND token != ?").run(req.user.id, cookieOf(req.headers.cookie, COOKIE));   // log out other devices
+  res.json({ ok: true });
+});
+app.post("/api/account/email", requireUser, (req, res) => {
+  const raw = String(req.body?.email || "").trim(), email = cleanEmail(raw);
+  if (raw && !email) return res.status(400).json({ error: "That email address doesn't look right" });
+  if (email && q("SELECT 1 FROM users WHERE email = ? AND id != ?").get(email, req.user.id)) return res.status(409).json({ error: "Email already in use" });
+  q("UPDATE users SET email = ? WHERE id = ?").run(email || null, req.user.id);
+  res.json({ ok: true, email });
+});
+
+function credit(userId, seconds, reason) {
+  q("UPDATE users SET balance = ROUND(balance + ?, 2) WHERE id = ?").run(seconds, userId);
+  q("INSERT INTO ledger (user_id, delta, reason, created_at) VALUES (?, ?, ?, ?)").run(userId, seconds, reason, now());
+  return balanceOf(userId);
+}
+
+// ---------- vouchers ----------
+const CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+const newCode = () => Array.from({ length: 3 }, () => Array.from(crypto.randomBytes(4), (b) => CODE_CHARS[b % CODE_CHARS.length]).join("")).join("-");
+
+app.post("/api/vouchers/redeem", requireUser, (req, res) => {
+  if (limited(req, "redeem", 10, 600000)) return res.status(429).json({ error: "Too many attempts, try later" });
+  const code = String(req.body?.code || "").trim().toUpperCase();
+  const v = q("SELECT * FROM vouchers WHERE code = ?").get(code);
+  if (!v) return res.status(404).json({ error: "That code is not valid" });
+  if (v.uses >= v.max_uses) return res.status(410).json({ error: "That code has already been used" });
+  if (q("SELECT 1 FROM redemptions WHERE code = ? AND user_id = ?").get(code, req.user.id)) return res.status(409).json({ error: "You have already used this code" });
+  q("INSERT INTO redemptions (code, user_id, created_at) VALUES (?, ?, ?)").run(code, req.user.id, now());
+  q("UPDATE vouchers SET uses = uses + 1 WHERE code = ?").run(code);
+  res.json({ seconds: v.seconds, balance: credit(req.user.id, v.seconds, `Voucher ${code}`) });
+});
+
+// ---------- packages + USDT orders ----------
+const ORDER_TTL = 2 * 3600000;
+const payAddress = (network) => setting(network === "bsc" ? "usdt_bsc_address" : "usdt_tron_address");
+const chainOpts = () => ({ tronKey: setting("tron_api_key") });
+
+app.get("/api/packages", requireUser, (_req, res) => {
+  res.json({
+    packages: q("SELECT id, name, seconds, price FROM packages WHERE active = 1 ORDER BY sort, price").all(),
+    networks: Object.keys(NETWORKS).filter(payAddress).map((id) => ({ id, label: NETWORKS[id].label })),
+  });
+});
+
+async function orderView(o) {
+  return {
+    id: o.id, package: o.package_name, seconds: o.seconds, network: o.network, networkLabel: NETWORKS[o.network].label,
+    amount: o.amount, address: o.address, status: o.status, txid: o.txid || "", note: o.note || "", expiresAt: o.expires_at,
+    qr: o.status === "pending" ? await QRCode.toDataURL(o.address, { margin: 1, width: 220 }) : "",
+  };
+}
+app.get("/api/orders/current", requireUser, async (req, res) => {
+  const o = q("SELECT * FROM orders WHERE user_id = ? AND status = 'pending' AND expires_at > ? ORDER BY created_at DESC").get(req.user.id, now());
+  res.json({ order: o ? await orderView(o) : null });
+});
+app.post("/api/orders", requireUser, async (req, res) => {
+  const pkg = q("SELECT * FROM packages WHERE id = ? AND active = 1").get(Number(req.body?.packageId));
+  const network = String(req.body?.network || "");
+  if (!pkg) return res.status(404).json({ error: "Package not found" });
+  if (!NETWORKS[network] || !payAddress(network)) return res.status(400).json({ error: "That network is not available" });
+  if (q("SELECT 1 FROM orders WHERE user_id = ? AND status = 'pending' AND txid IS NOT NULL").get(req.user.id))
+    return res.status(409).json({ error: "You have a payment being checked. Wait for it to finish first." });
+  q("UPDATE orders SET status = 'cancelled' WHERE user_id = ? AND status = 'pending'").run(req.user.id);
+
+  // A unique amount per open order ties an on-chain payment to exactly one buyer.
+  let amount = "";
+  for (let i = 0; i < 200 && !amount; i++) {
+    const a = (pkg.price + crypto.randomInt(1, 100) / 10000).toFixed(4);
+    if (!q("SELECT 1 FROM orders WHERE network = ? AND amount = ? AND status = 'pending' AND expires_at > ?").get(network, a, now())) amount = a;
+  }
+  if (!amount) return res.status(503).json({ error: "Too many open orders right now, try again in a minute" });
+  const id = crypto.randomBytes(12).toString("hex"), t = now();
+  q("INSERT INTO orders (id, user_id, package_name, seconds, network, amount, address, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(id, req.user.id, pkg.name, pkg.seconds, network, amount, payAddress(network), t, t + ORDER_TTL);
+  res.json({ order: await orderView(q("SELECT * FROM orders WHERE id = ?").get(id)) });
+});
+app.post("/api/orders/:id/cancel", requireUser, (req, res) => {
+  const r = q("UPDATE orders SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status = 'pending' AND txid IS NULL").run(req.params.id, req.user.id);
+  res.json({ ok: r.changes > 0 });
+});
+
+// Check an order's txid on-chain; credit once if it is the exact payment.
+async function checkOrder(o) {
+  const r = await findTransfer(o.network, o.txid, o.address, chainOpts());
+  if (r.status === "pending") return { status: "pending" };
+  const fail = (note) => { q("UPDATE orders SET txid = NULL, note = ? WHERE id = ? AND status = 'pending'").run(note, o.id); return { status: "invalid", error: note }; };
+  if (r.status === "invalid") return fail(r.reason);
+  if (r.units !== toUnits(o.amount, o.network)) return fail(`Amount does not match. This order needs exactly ${o.amount} USDT. Contact support with your transaction ID.`);
+  if (r.timeMs < o.created_at - 600000) return fail("That transaction is older than this order");
+  const done = q("UPDATE orders SET status = 'paid', paid_at = ?, note = NULL WHERE id = ? AND status = 'pending'").run(now(), o.id);
+  if (done.changes) credit(o.user_id, o.seconds, `USDT top-up: ${o.package_name} (${o.amount} USDT, ${NETWORKS[o.network].label})`);
+  return { status: "paid", balance: balanceOf(o.user_id) };
+}
+app.post("/api/orders/:id/confirm", requireUser, async (req, res) => {
+  if (limited(req, "confirm", 30, 600000)) return res.status(429).json({ error: "Too many attempts, try later" });
+  const o = q("SELECT * FROM orders WHERE id = ? AND user_id = ?").get(req.params.id, req.user.id);
+  if (!o) return res.status(404).json({ error: "Order not found" });
+  if (o.status === "paid") return res.json({ status: "paid", balance: balanceOf(req.user.id) });
+  if (o.status !== "pending") return res.status(410).json({ error: "This order was cancelled. Start a new one." });
+  let txid = String(req.body?.txid || o.txid || "").trim();
+  if (o.network === "tron") txid = txid.replace(/^0x/i, "");
+  if (!isTxid(o.network, txid)) return res.status(400).json({ error: "That doesn't look like a transaction ID (hash)" });
+  txid = txid.toLowerCase();
+  if (q("SELECT 1 FROM orders WHERE network = ? AND txid = ? AND id != ?").get(o.network, txid, o.id)) return res.status(409).json({ error: "That transaction has already been used" });
+  q("UPDATE orders SET txid = ?, note = NULL WHERE id = ?").run(txid, o.id);
+  try { res.json(await checkOrder({ ...o, txid })); }
+  catch (e) { console.error("order check:", e?.message || e); res.json({ status: "pending" }); }   // network hiccup: the background check retries
+});
+// Keep checking submitted payments in the background, so users don't have to stay on the page.
+let checking = false;
+setInterval(async () => {
+  if (checking) return; checking = true;
+  try {
+    q("UPDATE orders SET status = 'expired' WHERE status = 'pending' AND txid IS NULL AND expires_at < ?").run(now());
+    for (const o of q("SELECT * FROM orders WHERE status = 'pending' AND txid IS NOT NULL ORDER BY created_at LIMIT 5").all()) {
+      try {
+        const r = await checkOrder(o);
+        if (r.status === "pending" && now() - o.created_at > 24 * 3600000) q("UPDATE orders SET status = 'expired', note = 'Not confirmed after 24h' WHERE id = ?").run(o.id);
+      } catch (e) { console.error("order sweep:", e?.message || e); }
+    }
+  } finally { checking = false; }
+}, 30000).unref();
+
+// ---------- characters (per-user gallery + admin presets) ----------
+const IMG_RE = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/;
+function saveCharacter(userId, body) {
+  const name = String(body?.name || "").trim().slice(0, 40) || "Character";
+  const m = IMG_RE.exec(String(body?.image || ""));
+  if (!m) return { error: "Add an image for the character" };
+  const buf = Buffer.from(m[2], "base64");
+  if (buf.length > 900000) return { error: "Image is too large" };
+  const info = q("INSERT INTO characters (user_id, name, prompt, mime, created_at) VALUES (?, ?, ?, ?, ?)").run(userId, name, String(body?.prompt || "").slice(0, 2000), m[1], now());
+  const id = Number(info.lastInsertRowid);
+  fs.writeFileSync(path.join(CHAR_DIR, String(id)), buf);
+  return { id };
+}
+app.get("/api/characters", requireUser, (req, res) => {
+  res.json({ characters: q("SELECT id, name, prompt, user_id IS NULL AS preset FROM characters WHERE user_id = ? OR user_id IS NULL ORDER BY user_id IS NULL DESC, id DESC").all(req.user.id) });
+});
+app.post("/api/characters", requireUser, (req, res) => {
+  if (q("SELECT COUNT(*) AS n FROM characters WHERE user_id = ?").get(req.user.id).n >= 30) return res.status(400).json({ error: "You can save up to 30 characters. Delete one first." });
+  const r = saveCharacter(req.user.id, req.body);
+  res.status(r.error ? 400 : 200).json(r);
+});
+app.get("/api/characters/:id/image", requireUser, (req, res) => {
+  const c = q("SELECT * FROM characters WHERE id = ? AND (user_id = ? OR user_id IS NULL)").get(Number(req.params.id), req.user.id);
+  const file = c && path.join(CHAR_DIR, String(c.id));
+  if (!c || !fs.existsSync(file)) return res.status(404).end();
+  res.setHeader("Content-Type", c.mime); res.setHeader("Cache-Control", "private, max-age=86400");
+  fs.createReadStream(file).pipe(res);
+});
+app.delete("/api/characters/:id", requireUser, (req, res) => {
+  const c = q("SELECT * FROM characters WHERE id = ?").get(Number(req.params.id));
+  if (!c || !(c.user_id === req.user.id || (c.user_id === null && req.user.is_admin))) return res.status(404).json({ error: "Character not found" });
+  q("DELETE FROM characters WHERE id = ?").run(c.id);
+  fs.rmSync(path.join(CHAR_DIR, String(c.id)), { force: true });
+  res.json({ ok: true });
+});
+
 // ---------- admin ----------
 const NUMERIC = ["rate_lucy", "rate_eden_5b", "rate_eden_14b", "first_frame_fee", "max_session_seconds", "signup_bonus"];
 const mask = (v) => (v ? `••••${v.slice(-4)}` : "");
+const TEXT_KEYS = ["usdt_bsc_address", "usdt_tron_address", "smtp_host", "smtp_port", "smtp_user", "smtp_from", "site_url"];
+const SECRET_KEYS = ["fal_key", "decart_key", "tron_api_key", "smtp_pass"];
 
 app.get("/api/admin/settings", requireAdmin, (_req, res) => {
   const out = { fal_key_hint: mask(setting("fal_key")), decart_key_hint: mask(setting("decart_key")), allow_signup: setting("allow_signup") === "1", lucy_fast: setting("lucy_fast") === "1", lucy_model: setting("lucy_model") };
   for (const k of NUMERIC) out[k] = num(k);
+  for (const k of TEXT_KEYS) out[k] = setting(k);
+  out.tron_api_key_hint = mask(setting("tron_api_key")); out.smtp_pass_hint = mask(setting("smtp_pass"));
   res.json(out);
 });
 app.post("/api/admin/settings", requireAdmin, (req, res) => {
@@ -352,7 +606,14 @@ app.post("/api/admin/settings", requireAdmin, (req, res) => {
     if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: `Invalid value for ${k}` });
     setSetting(k, k === "max_session_seconds" ? Math.max(10, Math.floor(n)) : n);
   }
-  for (const k of ["fal_key", "decart_key"]) if (typeof b[k] === "string" && b[k].trim()) setSetting(k, b[k].trim());   // blank = keep current
+  if (b.usdt_bsc_address && !isBscAddress(String(b.usdt_bsc_address).trim())) return res.status(400).json({ error: "BSC address must be 0x followed by 40 hex characters" });
+  if (b.usdt_tron_address && !isTronAddress(String(b.usdt_tron_address).trim())) return res.status(400).json({ error: "Tron address is not valid (check for a typo)" });
+  if (b.site_url && !/^https?:\/\/[^\s/]+$/.test(String(b.site_url).trim().replace(/\/+$/, ""))) return res.status(400).json({ error: "Site URL should look like https://your-site.com" });
+  for (const k of TEXT_KEYS) if (typeof b[k] === "string") {
+    const v = b[k].trim().replace(k === "site_url" ? /\/+$/ : /$^/, "");
+    q("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(k, v.slice(0, 300));   // may be cleared
+  }
+  for (const k of SECRET_KEYS) if (typeof b[k] === "string" && b[k].trim()) setSetting(k, b[k].trim());   // blank = keep current
   if (b.allow_signup !== undefined) setSetting("allow_signup", b.allow_signup ? "1" : "0");
   if (b.lucy_fast !== undefined) setSetting("lucy_fast", b.lucy_fast ? "1" : "0");
   if (typeof b.lucy_model === "string" && /^lucy[\w.-]{0,30}$/.test(b.lucy_model.trim())) setSetting("lucy_model", b.lucy_model.trim());
@@ -362,9 +623,9 @@ app.post("/api/admin/settings", requireAdmin, (req, res) => {
 app.get("/api/admin/users", requireAdmin, (req, res) => {
   const s = `%${String(req.query.q || "").replace(/[%_]/g, "")}%`;
   res.json({
-    users: q(`SELECT u.id, u.username, u.balance, u.is_admin, u.disabled, u.created_at,
+    users: q(`SELECT u.id, u.username, u.email, u.balance, u.is_admin, u.disabled, u.created_at,
                      (SELECT COALESCE(SUM(charged), 0) FROM sessions WHERE user_id = u.id) AS used
-              FROM users u WHERE u.username LIKE ? ORDER BY u.id DESC LIMIT 200`).all(s),
+              FROM users u WHERE u.username LIKE ? OR u.email LIKE ? ORDER BY u.id DESC LIMIT 200`).all(s, s),
   });
 });
 app.post("/api/admin/users/:id/balance", requireAdmin, (req, res) => {
@@ -395,6 +656,61 @@ app.post("/api/admin/users/:id", requireAdmin, (req, res) => {
   }
   res.json({ ok: true });
 });
+app.post("/api/admin/presets", requireAdmin, (req, res) => {
+  const r = saveCharacter(null, req.body);
+  res.status(r.error ? 400 : 200).json(r);
+});
+app.get("/api/admin/packages", requireAdmin, (_req, res) => res.json({ packages: q("SELECT * FROM packages ORDER BY sort, price").all() }));
+app.post("/api/admin/packages", requireAdmin, (req, res) => {
+  const b = req.body || {}, name = String(b.name || "").trim().slice(0, 40);
+  const seconds = Math.floor(Number(b.seconds)), price = Math.round(Number(b.price) * 100) / 100;
+  if (!name) return res.status(400).json({ error: "Give the package a name" });
+  if (!(seconds > 0) || seconds > 1e8) return res.status(400).json({ error: "Seconds must be more than 0" });
+  if (!(price > 0) || price > 1e6) return res.status(400).json({ error: "Price must be more than 0" });
+  if (b.id) q("UPDATE packages SET name = ?, seconds = ?, price = ?, active = ? WHERE id = ?").run(name, seconds, price, b.active === false ? 0 : 1, Number(b.id));
+  else q("INSERT INTO packages (name, seconds, price) VALUES (?, ?, ?)").run(name, seconds, price);
+  res.json({ ok: true });
+});
+app.delete("/api/admin/packages/:id", requireAdmin, (req, res) => { q("DELETE FROM packages WHERE id = ?").run(Number(req.params.id)); res.json({ ok: true }); });
+
+app.get("/api/admin/vouchers", requireAdmin, (_req, res) => res.json({ vouchers: q("SELECT * FROM vouchers ORDER BY created_at DESC, code LIMIT 300").all() }));
+app.post("/api/admin/vouchers", requireAdmin, (req, res) => {
+  const b = req.body || {};
+  const seconds = Math.floor(Number(b.seconds)), count = Math.floor(Number(b.count) || 1), maxUses = Math.floor(Number(b.maxUses) || 1);
+  if (!(seconds > 0) || seconds > 1e8) return res.status(400).json({ error: "Seconds must be more than 0" });
+  if (!(count >= 1 && count <= 200)) return res.status(400).json({ error: "Make between 1 and 200 codes at a time" });
+  if (!(maxUses >= 1 && maxUses <= 100000)) return res.status(400).json({ error: "Uses per code must be at least 1" });
+  const codes = [];
+  while (codes.length < count) {
+    const code = newCode();
+    if (q("SELECT 1 FROM vouchers WHERE code = ?").get(code)) continue;
+    q("INSERT INTO vouchers (code, seconds, max_uses, note, created_at) VALUES (?, ?, ?, ?, ?)").run(code, seconds, maxUses, String(b.note || "").slice(0, 80), now());
+    codes.push(code);
+  }
+  res.json({ codes });
+});
+app.delete("/api/admin/vouchers/:code", requireAdmin, (req, res) => { q("DELETE FROM vouchers WHERE code = ?").run(String(req.params.code).toUpperCase()); res.json({ ok: true }); });
+
+app.get("/api/admin/orders", requireAdmin, (_req, res) => {
+  res.json({ orders: q(`SELECT o.id, o.package_name, o.seconds, o.network, o.amount, o.status, o.txid, o.note, o.created_at, u.username
+                        FROM orders o JOIN users u ON u.id = o.user_id WHERE o.status != 'cancelled' ORDER BY o.created_at DESC LIMIT 60`).all() });
+});
+// Manual approval, e.g. the buyer sent the wrong amount and you have checked your wallet yourself.
+app.post("/api/admin/orders/:id/approve", requireAdmin, (req, res) => {
+  const o = q("SELECT * FROM orders WHERE id = ?").get(req.params.id);
+  if (!o) return res.status(404).json({ error: "Order not found" });
+  const done = q("UPDATE orders SET status = 'paid', paid_at = ?, note = ? WHERE id = ? AND status != 'paid'").run(now(), `Approved by ${req.user.username}`, o.id);
+  if (!done.changes) return res.status(409).json({ error: "Order is already paid" });
+  credit(o.user_id, o.seconds, `USDT top-up: ${o.package_name} (approved by ${req.user.username})`);
+  res.json({ ok: true });
+});
+app.post("/api/admin/test-email", requireAdmin, async (req, res) => {
+  const to = cleanEmail(req.body?.to) || req.user.email;
+  if (!to) return res.status(400).json({ error: "Enter an address to send the test to" });
+  try { await sendMail(to, "LiveChar test email", "Your LiveChar email settings work."); res.json({ ok: true, to }); }
+  catch (e) { res.status(502).json({ error: `Email failed: ${e?.message || e}` }); }
+});
+
 app.get("/api/admin/activity", requireAdmin, (_req, res) => {
   res.json({
     sessions: q(`SELECT s.engine, s.rate, s.started_at, s.ended_at, s.last_beat, s.charged, u.username
