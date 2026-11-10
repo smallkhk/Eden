@@ -76,7 +76,8 @@ Electron shell around the same web app, plus:
 - **Hotkeys** (work while another app is in front): Ctrl+Alt+S start/stop, Ctrl+Alt+Up/Down zoom, Ctrl+Alt+0 reset zoom,
   Ctrl+Alt+V virtual camera, Ctrl+Alt+P photo, Ctrl+Alt+R record.
 - **Tray** — minimizing sends the app to the tray and keeps the video and virtual camera running. Closing the window quits.
-- **Auto-update** — installed apps update from the latest GitHub release. To ship one: `git tag v1.2.0 && git push origin v1.2.0`.
+- **Auto-update** — installed apps update from the latest GitHub release. To ship one: Actions → Build Windows app →
+  Run workflow → set "release version" (e.g. `1.2.0`). Use a higher number each time.
 
 The app loads your LiveChar server, so the server must be running on HTTPS first.
 
