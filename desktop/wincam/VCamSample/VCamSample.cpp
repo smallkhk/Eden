@@ -38,9 +38,9 @@ static int Fail(HRESULT hr, const char* step)
 // Shared memory for frames. The camera source runs inside Windows services, so they need read access.
 static HANDLE CreateFrameSection()
 {
-	// interactive users: read + write; everyone else (the camera services): read
+	// signed-in users (the app): read + write; everyone else (the camera services): read
 	PSECURITY_DESCRIPTOR sd = nullptr;
-	if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:(A;;GRGW;;;IU)(A;;GR;;;WD)", SDDL_REVISION_1, &sd, nullptr))
+	if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:(A;;GRGW;;;AU)(A;;GR;;;WD)", SDDL_REVISION_1, &sd, nullptr))
 		return nullptr;
 
 	SECURITY_ATTRIBUTES sa{};

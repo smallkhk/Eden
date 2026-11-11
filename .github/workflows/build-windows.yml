@@ -70,52 +70,6 @@ jobs:
           Copy-Item LICENSE ../wincam-bin/LICENSE-VCamSample.txt
           Get-ChildItem ../wincam-bin
 
-      # Information only: build servers are not Windows 11 desktops, so this may fail without meaning anything.
-      # It also runs the unmodified upstream camera the same way, to tell our changes apart from the machine.
-      - name: Checkout upstream camera sample (for comparison)
-        continue-on-error: true
-        uses: actions/checkout@v4
-        with:
-          repository: smourier/VCamSample
-          ref: 58b6d4b0e0c2c97fdffd66d23e7c8da6b89f570d
-          path: vcam-upstream
-
-      - name: Try the camera on the build machine
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          Write-Host "OS: $([System.Environment]::OSVersion.VersionString)"
-          Get-Service FrameServer, FrameServerMonitor -ErrorAction SilentlyContinue | Format-Table Name, Status, StartType
-          # allow camera use, in case privacy settings are what blocks it
-          foreach ($root in "HKLM", "HKCU") {
-            foreach ($k in "webcam", "webcam\NonPackaged") {
-              $path = "${root}:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$k"
-              New-Item -Path $path -Force | Out-Null; Set-ItemProperty -Path $path -Name Value -Value Allow
-            }
-          }
-          $dir = "C:\LiveCharCamTest"; New-Item -ItemType Directory -Force $dir | Out-Null
-          Copy-Item desktop/wincam-bin/* $dir
-          function Try-Camera($label, $dll, $clsid) {
-            $r = Start-Process regsvr32 -ArgumentList "/s", $dll -Wait -PassThru
-            $out = "$dir\out-$label.txt"
-            $p = Start-Process -FilePath "$dir\LiveCharCam.exe" -ArgumentList "0 $clsid" -RedirectStandardOutput $out -PassThru -NoNewWindow
-            Start-Sleep -Seconds 8
-            $running = -not $p.HasExited
-            if ($running) { $p.Kill() }
-            Write-Host "[$label] regsvr32=$($r.ExitCode) helper-running=$running output=$(Get-Content $out -Raw -ErrorAction SilentlyContinue)"
-          }
-          Try-Camera "livechar" "$dir\LiveCharCamSource.dll" ""
-          if (Test-Path vcam-upstream/VCamSample.sln) {
-            Push-Location vcam-upstream
-            nuget restore VCamSample.sln | Out-Null
-            $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-            $toolset = @(); if ((& $vswhere -latest -property catalog_productLineVersion) -eq "2022") { $toolset = @("/p:PlatformToolset=v143") }
-            msbuild VCamSample.sln /m /v:q /nologo /t:VCamSampleSource /p:Configuration=Release /p:Platform=x64 @toolset | Select-Object -Last 3
-            Pop-Location
-            Copy-Item vcam-upstream/x64/Release/VCamSampleSource.dll "$dir\UpstreamSource.dll"
-            Try-Camera "upstream" "$dir\UpstreamSource.dll" "{3cad447d-f283-4af4-a3b2-6f5363309f52}"
-          }
-
       # ---- desktop app ----
       - uses: actions/setup-node@v4
         with:
@@ -133,6 +87,38 @@ jobs:
       - name: Install dependencies
         working-directory: desktop
         run: npm install --no-audit --no-fund
+
+      # ---- camera end-to-end test (information only: needs a Windows 11 class build machine) ----
+      # Starts the real helper, sends a test picture the way the app does, and reads it back through
+      # the camera like any other program would.
+      - name: Test the Windows 11 camera end to end
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Write-Host "OS: $([System.Environment]::OSVersion.VersionString)  session: $((Get-Process -Id $PID).SessionId)  user: $(whoami)"
+          foreach ($root in "HKLM", "HKCU") {
+            foreach ($k in "webcam", "webcam\NonPackaged") {
+              $path = "${root}:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$k"
+              New-Item -Path $path -Force | Out-Null; Set-ItemProperty -Path $path -Name Value -Value Allow
+            }
+          }
+          $dir = "C:\LiveCharCamTest"; New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item desktop/wincam-bin/* $dir
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && cl /nologo /EHsc /std:c++20 /Fe:$dir\camtest.exe /Fo:$dir\ desktop\wincam\test\camtest.cpp /link mfplat.lib mf.lib mfreadwrite.lib mfuuid.lib ole32.lib"
+          $r = Start-Process regsvr32 -ArgumentList "/s", "$dir\LiveCharCamSource.dll" -Wait -PassThru
+          Write-Host "regsvr32 exit code: $($r.ExitCode)"
+          Write-Host "===== shared memory hand-off ====="
+          node desktop/wincam/test/e2e.cjs "$dir\LiveCharCam.exe" "$dir\camtest.exe"
+          Write-Host "===== file hand-off ====="
+          Start-Sleep -Seconds 3
+          $env:LCV_FORCE_FILE = "1"
+          node desktop/wincam/test/e2e.cjs "$dir\LiveCharCam.exe" "$dir\camtest.exe"
+          Write-Host "===== no frames sent (should read black: 0,0,0) ====="
+          Start-Sleep -Seconds 4
+          $env:LCV_FORCE_FILE = ""; $env:LCV_NO_FRAMES = "1"
+          node desktop/wincam/test/e2e.cjs "$dir\\LiveCharCam.exe" "$dir\\camtest.exe"
+          Get-Service FrameServer, FrameServerMonitor -ErrorAction SilentlyContinue | Format-Table Name, Status
 
       - name: Build installer
         if: ${{ !startsWith(github.ref, 'refs/tags/v') && !inputs.release_version }}

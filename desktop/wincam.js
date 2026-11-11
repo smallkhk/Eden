@@ -61,7 +61,7 @@ function openFile(filePath) {
 }
 
 /**
- * opts: { helper, args?, filePath?, kernel32? }
+ * opts: { helper, args?, filePath?, kernel32?, forceFile? }
  * Returns { state(), error(), sendRgba(rgba), close() }. state: "starting" | "ready" | "error" | "closed".
  */
 function openWincam(opts) {
@@ -80,7 +80,7 @@ function openWincam(opts) {
     if (!line || state !== "starting") return;
     if (line.startsWith("ERROR")) return fail(explain(line));
     try {
-      if (line.includes("section")) { try { sink = openSection(opts.kernel32); } catch (e) { console.warn("wincam: section unavailable, using file:", e.message); } }
+      if (line.includes("section") && !opts.forceFile) { try { sink = openSection(opts.kernel32); } catch (e) { console.warn("wincam: section unavailable, using file:", e.message); } }
       if (!sink) sink = openFile(filePath);
       state = "ready";
     } catch (e) { fail(`Could not open the frame buffer (${e.message})`); }
@@ -88,7 +88,7 @@ function openWincam(opts) {
 
   function explain(line) {
     const code = (line.match(/0x[0-9A-Fa-f]{8}/) || [""])[0].toUpperCase();
-    if (code === "0X80070005") return "Windows refused to start the camera (access denied). Reinstall LiveChar, then try again.";
+    if (code === "0X80070005") return "Windows blocked the camera. Turn on Settings > Privacy & security > Camera > “Let desktop apps access your camera”, then switch the virtual camera off and on.";
     if (code === "0X80040154") return "The camera is not registered. Reinstall LiveChar.";
     return `Windows could not start the camera (${line.replace(/^ERROR\s*/, "").trim()})`;
   }
