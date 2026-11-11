@@ -71,20 +71,50 @@ jobs:
           Get-ChildItem ../wincam-bin
 
       # Information only: build servers are not Windows 11 desktops, so this may fail without meaning anything.
+      # It also runs the unmodified upstream camera the same way, to tell our changes apart from the machine.
+      - name: Checkout upstream camera sample (for comparison)
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          repository: smourier/VCamSample
+          ref: 58b6d4b0e0c2c97fdffd66d23e7c8da6b89f570d
+          path: vcam-upstream
+
       - name: Try the camera on the build machine
         continue-on-error: true
         shell: pwsh
         run: |
           Write-Host "OS: $([System.Environment]::OSVersion.VersionString)"
+          Get-Service FrameServer, FrameServerMonitor -ErrorAction SilentlyContinue | Format-Table Name, Status, StartType
+          # allow camera use, in case privacy settings are what blocks it
+          foreach ($root in "HKLM", "HKCU") {
+            foreach ($k in "webcam", "webcam\NonPackaged") {
+              $path = "${root}:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$k"
+              New-Item -Path $path -Force | Out-Null; Set-ItemProperty -Path $path -Name Value -Value Allow
+            }
+          }
           $dir = "C:\LiveCharCamTest"; New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item desktop/wincam-bin/* $dir
-          $r = Start-Process regsvr32 -ArgumentList "/s", "$dir\LiveCharCamSource.dll" -Wait -PassThru
-          Write-Host "regsvr32 exit code: $($r.ExitCode)"
-          $p = Start-Process -FilePath "$dir\LiveCharCam.exe" -ArgumentList "0" -RedirectStandardOutput "$dir\out.txt" -PassThru -NoNewWindow
-          Start-Sleep -Seconds 8
-          Write-Host "helper still running: $(-not $p.HasExited)"
-          if (-not $p.HasExited) { $p.Kill() } else { Write-Host "helper exit code: $($p.ExitCode)" }
-          Write-Host "helper output:"; Get-Content "$dir\out.txt" -ErrorAction SilentlyContinue
+          function Try-Camera($label, $dll, $clsid) {
+            $r = Start-Process regsvr32 -ArgumentList "/s", $dll -Wait -PassThru
+            $out = "$dir\out-$label.txt"
+            $p = Start-Process -FilePath "$dir\LiveCharCam.exe" -ArgumentList "0 $clsid" -RedirectStandardOutput $out -PassThru -NoNewWindow
+            Start-Sleep -Seconds 8
+            $running = -not $p.HasExited
+            if ($running) { $p.Kill() }
+            Write-Host "[$label] regsvr32=$($r.ExitCode) helper-running=$running output=$(Get-Content $out -Raw -ErrorAction SilentlyContinue)"
+          }
+          Try-Camera "livechar" "$dir\LiveCharCamSource.dll" ""
+          if (Test-Path vcam-upstream/VCamSample.sln) {
+            Push-Location vcam-upstream
+            nuget restore VCamSample.sln | Out-Null
+            $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+            $toolset = @(); if ((& $vswhere -latest -property catalog_productLineVersion) -eq "2022") { $toolset = @("/p:PlatformToolset=v143") }
+            msbuild VCamSample.sln /m /v:q /nologo /t:VCamSampleSource /p:Configuration=Release /p:Platform=x64 @toolset | Select-Object -Last 3
+            Pop-Location
+            Copy-Item vcam-upstream/x64/Release/VCamSampleSource.dll "$dir\UpstreamSource.dll"
+            Try-Camera "upstream" "$dir\UpstreamSource.dll" "{3cad447d-f283-4af4-a3b2-6f5363309f52}"
+          }
 
       # ---- desktop app ----
       - uses: actions/setup-node@v4

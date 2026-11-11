@@ -2,7 +2,7 @@
 // Registers the "LiveChar Camera" Windows 11 virtual camera for as long as the LiveChar app wants it,
 // and owns the shared memory the app writes frames into.
 //
-// Usage: LiveCharCam.exe <parent process id>
+// Usage: LiveCharCam.exe <parent process id> [class id]
 // Prints "READY" or "ERROR 0x........ <step>" on stdout. Exits when the parent exits or stdin closes.
 #include "framework.h"
 #include "tools.h"
@@ -76,7 +76,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 	WinTraceRegister();
 	WINTRACE(L"LiveCharCam starting '%s'", GetCommandLineW());
 
-	auto parentPid = lpCmdLine ? wcstoul(lpCmdLine, nullptr, 10) : 0;
+	// arguments: <parent pid> [class id of another camera source, for testing]
+	unsigned long parentPid = 0;
+	wchar_t otherClsid[64]{};
+	if (lpCmdLine)
+	{
+		swscanf_s(lpCmdLine, L"%lu %63s", &parentPid, otherClsid, (unsigned)_countof(otherClsid));
+	}
 	auto section = CreateFrameSection(); // not fatal: the app falls back to a file
 
 	winrt::init_apartment();
@@ -87,7 +93,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 	int exitCode = 0;
 	{
 		wil::com_ptr_nothrow<IMFVirtualCamera> vcam;
-		auto clsid = GUID_ToStringW(CLSID_VCam);
+		std::wstring clsid = otherClsid[0] ? std::wstring(otherClsid) : GUID_ToStringW(CLSID_VCam);
 		hr = MFCreateVirtualCamera(
 			MFVirtualCameraType_SoftwareCameraSource,
 			MFVirtualCameraLifetime_Session,
