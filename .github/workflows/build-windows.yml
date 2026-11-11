@@ -51,6 +51,41 @@ jobs:
           Copy-Item LICENSE ../desktop/softcam/LICENSE-softcam.txt
           Get-ChildItem -Recurse ../desktop/softcam
 
+      # ---- Windows 11 camera (Media Foundation), source in desktop/wincam ----
+      - name: Build LiveChar Camera (Windows 11)
+        working-directory: desktop/wincam
+        shell: pwsh
+        run: |
+          nuget restore VCamSample.sln
+          # the projects name the VS 2026 toolset; use the VS 2022 one when that is what the runner has
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $line = & $vswhere -latest -property catalog_productLineVersion
+          $toolset = @(); if ($line -eq "2022") { $toolset = @("/p:PlatformToolset=v143") }
+          Write-Host "Visual Studio $line $toolset"
+          msbuild VCamSample.sln /m /p:Configuration=Release /p:Platform=x64 @toolset
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force ../wincam-bin | Out-Null
+          Copy-Item x64/Release/VCamSample.exe       ../wincam-bin/LiveCharCam.exe
+          Copy-Item x64/Release/VCamSampleSource.dll ../wincam-bin/LiveCharCamSource.dll
+          Copy-Item LICENSE ../wincam-bin/LICENSE-VCamSample.txt
+          Get-ChildItem ../wincam-bin
+
+      # Information only: build servers are not Windows 11 desktops, so this may fail without meaning anything.
+      - name: Try the camera on the build machine
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Write-Host "OS: $([System.Environment]::OSVersion.VersionString)"
+          $dir = "C:\LiveCharCamTest"; New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item desktop/wincam-bin/* $dir
+          $r = Start-Process regsvr32 -ArgumentList "/s", "$dir\LiveCharCamSource.dll" -Wait -PassThru
+          Write-Host "regsvr32 exit code: $($r.ExitCode)"
+          $p = Start-Process -FilePath "$dir\LiveCharCam.exe" -ArgumentList "0" -RedirectStandardOutput "$dir\out.txt" -PassThru -NoNewWindow
+          Start-Sleep -Seconds 8
+          Write-Host "helper still running: $(-not $p.HasExited)"
+          if (-not $p.HasExited) { $p.Kill() } else { Write-Host "helper exit code: $($p.ExitCode)" }
+          Write-Host "helper output:"; Get-Content "$dir\out.txt" -ErrorAction SilentlyContinue
+
       # ---- desktop app ----
       - uses: actions/setup-node@v4
         with:

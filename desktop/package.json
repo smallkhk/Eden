@@ -1,7 +1,7 @@
 {
   "name": "livechar-desktop",
   "productName": "LiveChar",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "LiveChar desktop app with virtual camera output",
   "author": "LiveChar",
   "private": true,
@@ -26,6 +26,7 @@
       "main.js",
       "preload.js",
       "vcam.js",
+      "wincam.js",
       "setup.html",
       "config.json",
       "icon.png"
@@ -38,6 +39,10 @@
       {
         "from": "softcam",
         "to": "softcam"
+      },
+      {
+        "from": "wincam-bin",
+        "to": "wincam"
       }
     ],
     "win": {

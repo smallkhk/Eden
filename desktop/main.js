@@ -34,6 +34,14 @@ function softcamPath() {
   return path.join(base, "softcam", "x64", "softcam.dll");
 }
 
+// Windows 11 camera (Media Foundation). Needs Windows 11 (build 22000+) and the files from the installer.
+function wincamDir() {
+  if (process.env.LIVECHAR_WINCAM) return process.env.LIVECHAR_WINCAM; // dev/testing
+  if (process.platform !== "win32" || Number(require("node:os").release().split(".")[2] || 0) < 22000) return "";
+  const dir = path.join(app.isPackaged ? process.resourcesPath : __dirname, "wincam");
+  return fs.existsSync(path.join(dir, "LiveCharCam.exe")) ? dir : "";
+}
+
 const ICON = path.join(__dirname, "icon.png");
 const HOTKEYS = [
   ["Ctrl+Alt+S", "toggle", "Start / stop"],
@@ -60,7 +68,8 @@ function createWindow() {
       contextIsolation: true, nodeIntegration: false,
       sandbox: false,               // preload loads the native virtual-camera library
       backgroundThrottling: false,
-      additionalArguments: [`--livechar-origin=${origin}`, `--livechar-softcam=${softcamPath()}`],
+      additionalArguments: [`--livechar-origin=${origin}`, `--livechar-softcam=${softcamPath()}`, `--livechar-wincam=${wincamDir()}`,
+        ...(process.env.LIVECHAR_WINCAM_HELPER ? [`--livechar-wincam-helper=${process.env.LIVECHAR_WINCAM_HELPER}`] : [])],
     },
   });
 

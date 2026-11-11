@@ -5,3 +5,7 @@ desktop/softcam/
 softcam-src/
 data/
 desktop/package-lock.json
+desktop/wincam-bin/
+desktop/wincam/x64/
+desktop/wincam/packages/
+desktop/wincam/**/x64/

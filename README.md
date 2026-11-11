@@ -68,8 +68,11 @@ Keys never reach the browser: Decart uses 60s client tokens, fal goes through `/
 
 Electron shell around the same web app, plus:
 
-- **Virtual camera** — tick "Virtual camera output", then pick **DirectShow Softcam** as the camera in
-  the other app. 1280x720, fed from the output pane. Uses [Softcam](https://github.com/tshino/softcam) (MIT).
+- **Virtual camera** — tick "Send to virtual camera", then pick the camera in the other app:
+  - **LiveChar Camera** — Windows 11 only, visible to every app (Media Foundation). Source in `desktop/wincam`,
+    based on [VCamSample](https://github.com/smourier/VCamSample) (MIT). Always 1280x720.
+  - **DirectShow Softcam** — Windows 10 and 11, visible to classic desktop apps and browsers.
+    Uses [Softcam](https://github.com/tshino/softcam) (MIT).
 - **Output zoom** — scroll over the output to zoom (1x–4x), drag to move, double-click to reset.
   The virtual camera gets the same framing. (Zoom also works in the browser version.)
 

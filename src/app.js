@@ -416,7 +416,14 @@ if (desk) {
       const r = startVcam();
       if (!r.ok) { ui.vcam.checked = false; ui.vcamHint.hidden = true; setNote(r.error); return; }
       ui.vcamHint.hidden = false;
-      const show = () => { ui.vcamHint.textContent = desk.connected() ? `In use by another app as “${desk.name}”.` : `Select “${desk.name}” as the camera in your other app.`; };
+      const show = () => {
+        const i = desk.info?.() || { names: [desk.name] };
+        let text = i.names.length ? `In your other app, choose the camera called “${i.names.join("” or “")}”.` : "Starting the camera…";
+        if (i.names.length > 1) text += " Use LiveChar Camera where it shows up; the other is for older apps.";
+        if (i.win11 === "error") text += ` The Windows 11 camera did not start: ${i.win11Error}`;
+        if (desk.connected()) text += " An app is using it now.";
+        ui.vcamHint.textContent = text;
+      };
       show(); vcamPoll = setInterval(show, 2000);
     } else { desk.stop(); ui.vcamHint.hidden = true; }
   });
