@@ -140,3 +140,10 @@ no virtual camera, no driver.
 4. Reload sites that were already open. The microphone stays your real one.
 
 `extension/player.js` is a copy of `public/lc-player.js`: keep them the same.
+
+### Safari (iPhone, iPad, Mac)
+
+The same `extension/` folder is built into the iOS app as a Safari extension ("LiveChar Camera"), Safari 18+.
+After installing the app: Settings → Apps → Safari → Extensions → LiveChar Camera → turn on, and allow it on all
+websites. Then in Safari tap the extensions button (puzzle piece in the address bar) → LiveChar Camera, paste the link.
+Use it on a different iPhone/iPad than the one running LiveChar: iOS pauses LiveChar's camera when Safari is in front.

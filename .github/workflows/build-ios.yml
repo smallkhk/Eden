@@ -3,7 +3,7 @@ name: Build iOS app
 on:
   push:
     branches: [main, "ios-*"]
-    paths: ["ios/**", ".github/workflows/build-ios.yml"]
+    paths: ["ios/**", "extension/**", ".github/workflows/build-ios.yml"]
   workflow_dispatch:
     inputs:
       server_url:

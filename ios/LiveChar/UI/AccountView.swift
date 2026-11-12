@@ -51,7 +51,7 @@ struct AccountView: View {
                         Button("Make a new link", role: .destructive) { confirmReset = true }
                     } else { ProgressView() }
                 } header: { Text("Live link") } footer: {
-                    Text("Turn on “Share live to my link” in the studio. Open the link in any browser to watch, or paste it into the LiveChar Chrome extension to use your output as a camera in Chrome. A new link stops the old one working.")
+                    Text("Turn on “Share live to my link” in the studio. Open the link in any browser to watch, or paste it into the LiveChar Camera extension to use your output as a camera — Chrome on a PC, or Safari on another iPhone/iPad/Mac (Settings → Apps → Safari → Extensions → LiveChar Camera → turn on, allow all websites). A new link stops the old one working.")
                 }
 
                 Section("History") {

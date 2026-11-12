@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "LiveChar Camera",
   "version": "1.0.0",
-  "description": "Use the live output of your LiveChar iPhone app as your camera in Chrome.",
-  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "description": "Use the live output of your LiveChar iPhone app as your camera in the browser.",
+  "icons": { "16": "icon-16.png", "32": "icon-32.png", "48": "icon-48.png", "128": "icon-128.png" },
   "action": { "default_popup": "popup.html", "default_title": "LiveChar Camera" },
   "permissions": ["storage"],
   "content_scripts": [

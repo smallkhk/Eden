@@ -25,6 +25,7 @@ targets:
     dependencies:
       - package: LiveKit
       - package: LiveKitWebRTC
+      - target: LiveCharSafari
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.livechar.ios
@@ -63,3 +64,27 @@ targets:
         UIFileSharingEnabled: false
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+
+  # Safari extension: same files as the Chrome extension (../extension), shipped inside the app.
+  LiveCharSafari:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: SafariExtension
+      - path: ../extension
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.livechar.ios.safari
+        PRODUCT_NAME: LiveCharSafari
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: NO
+    info:
+      path: SafariExtension/Info.plist
+      properties:
+        CFBundleDisplayName: LiveChar Camera
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.Safari.web-extension
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SafariWebExtensionHandler
