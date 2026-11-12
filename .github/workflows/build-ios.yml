@@ -2,7 +2,7 @@ name: Build iOS app
 
 on:
   push:
-    branches: [main]
+    branches: [main, "ios-*"]
     paths: ["ios/**", ".github/workflows/build-ios.yml"]
   workflow_dispatch:
     inputs:
@@ -30,6 +30,12 @@ jobs:
           sudo xcode-select -s "$X"
           xcodebuild -version
 
+      - name: Cache Swift packages (LiveKit, WebRTC)
+        uses: actions/cache@v4
+        with:
+          path: ios/spm
+          key: spm-${{ hashFiles('ios/project.yml') }}
+
       - name: Generate the Xcode project
         working-directory: ios
         run: |
@@ -47,9 +53,11 @@ jobs:
           [ -n "$VERSION" ] && EXTRA+=("MARKETING_VERSION=${VERSION#v}")
           xcodebuild -project LiveChar.xcodeproj -scheme LiveChar -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            -clonedSourcePackagesDirPath spm -skipPackagePluginValidation -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            CURRENT_PROJECT_VERSION=${{ github.run_number }} "${EXTRA[@]}" build | tail -40
-          test "${PIPESTATUS[0]}" -eq 0
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} "${EXTRA[@]}" build > build.log 2>&1 || { grep -E "error:|warning: .*(LiveChar/)" build.log | grep -v "^\s*$" | head -80; tail -30 build.log; exit 1; }
+          grep -E "LiveChar/.*warning:" build.log | sort -u | head -40 || true
+          tail -3 build.log
           /usr/libexec/PlistBuddy -c "Print :LiveCharURL" build/Build/Products/Release-iphoneos/LiveChar.app/Info.plist
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" build/Build/Products/Release-iphoneos/LiveChar.app/Info.plist
 

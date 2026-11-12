@@ -13,3 +13,5 @@ desktop/wincam/**/x64/
 ios/LiveChar.xcodeproj/
 ios/LiveChar/Info.plist
 ios/build/
+ios/spm/
+ios/build.log

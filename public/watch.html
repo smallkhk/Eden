@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>LiveChar · Live</title>
+<link rel="stylesheet" href="/ui.css">
+<style>
+  html, body { height:100%; background:#000; overflow:hidden; }
+  #v { position:fixed; inset:0; width:100%; height:100%; object-fit:contain; background:#000; }
+  .hud { position:fixed; left:16px; right:16px; top:max(14px, env(safe-area-inset-top)); display:flex; align-items:center; gap:10px; transition:opacity .4s; }
+  body.idle .hud { opacity:0; }
+  .tag { display:inline-flex; align-items:center; gap:8px; padding:7px 13px; border-radius:99px; background:rgba(14,16,32,.72); backdrop-filter:blur(10px);
+         font:600 13px/1 var(--body); color:var(--dim); border:1px solid var(--line); }
+  .tag i { width:8px; height:8px; border-radius:50%; background:var(--dim); }
+  .tag.live { color:#fff; } .tag.live i { background:var(--char); box-shadow:0 0 0 4px rgba(255,92,138,.25); }
+  .hud .sp { flex:1; }
+  .hud button { all:unset; cursor:pointer; padding:7px 13px; border-radius:99px; background:rgba(14,16,32,.72); border:1px solid var(--line); font:600 13px/1 var(--body); color:var(--text); }
+  .msg { position:fixed; left:0; right:0; bottom:max(18px, env(safe-area-inset-bottom)); text-align:center; color:var(--dim); font-size:13px; }
+</style>
+</head>
+<body>
+<canvas id="v"></canvas>
+<div class="hud">
+  <span class="tag" id="state"><i></i><span id="stateText">Connecting…</span></span>
+  <span class="sp"></span>
+  <button id="fs" type="button">Full screen</button>
+</div>
+<div class="msg" id="msg" hidden></div>
+<script src="/lc-player.js"></script>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const link = LiveCharPlayer.parseLink(location.href);
+  const setState = (live, text) => { $("state").classList.toggle("live", live); $("stateText").textContent = text; };
+  if (!LiveCharPlayer.supported) {
+    setState(false, "Not supported");
+    $("msg").hidden = false; $("msg").textContent = "This browser can't play the live stream. Use Chrome, Edge or Safari 16.4+.";
+  } else if (!link) {
+    setState(false, "Bad link");
+  } else {
+    const player = LiveCharPlayer.create($("v"), { onState: (s) => setState(s === "live", s === "live" ? "LIVE" : "Waiting for the phone…") });
+    LiveCharPlayer.follow(link.stream, player.push, { onStatus: (s) => {
+      if (s === "unknown") setState(false, "This link was reset");
+      else if (s === "offline") setState(false, "Reconnecting…");
+    } });
+  }
+  $("fs").onclick = () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.());
+  let idleT; const wake = () => { document.body.classList.remove("idle"); clearTimeout(idleT); idleT = setTimeout(() => document.body.classList.add("idle"), 2500); };
+  ["pointermove", "pointerdown", "keydown"].forEach((e) => addEventListener(e, wake)); wake();
+</script>
+</body>
+</html>

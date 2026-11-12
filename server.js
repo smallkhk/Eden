@@ -723,6 +723,102 @@ app.get("/api/admin/activity", requireAdmin, (_req, res) => {
   });
 });
 
+// ---------- share live: the iOS app streams its output to a watch link ----------
+// Each user has one fixed link (/watch/<id>). The app POSTs H.264 packets; viewers (watch page, Chrome
+// extension) keep one streaming GET open and get them as they arrive. Plain HTTP both ways, so it works
+// behind any Nginx without extra config (responses carry X-Accel-Buffering: no).
+// Packet: [u32 length][u8 flags][u64 timestamp µs][H.264 Annex B]. flags 1 = keyframe, 2 = stream ended.
+// A zero-length packet is a keep-alive.
+db.exec("CREATE TABLE IF NOT EXISTS shares (user_id INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE)");
+const SHARE_IDLE_MS = 20000, VIEWER_MAX_BACKLOG = 8 << 20, GOP_MAX_BYTES = 6 << 20;
+const live = new Map();   // share id -> { viewers:Set<res>, gop:Buffer[], gopBytes, live, last, userId }
+const shareIdOf = (userId) => {
+  let row = q("SELECT id FROM shares WHERE user_id = ?").get(userId);
+  if (!row) { row = { id: crypto.randomBytes(9).toString("base64url") }; q("INSERT INTO shares (user_id, id) VALUES (?, ?)").run(userId, row.id); }
+  return row.id;
+};
+const channel = (id) => { let c = live.get(id); if (!c) { c = { viewers: new Set(), gop: [], gopBytes: 0, live: false, last: 0 }; live.set(id, c); } return c; };
+const frameOf = (payload) => { const h = Buffer.alloc(4); h.writeUInt32BE(payload.length); return [h, payload]; };
+function sendTo(res, bufs) {
+  if (res.writableLength > VIEWER_MAX_BACKLOG) { res.destroy(); return; }   // viewer too slow: drop it, it reconnects
+  for (const b of bufs) res.write(b);
+}
+function endedPacket() { const p = Buffer.alloc(9); p[0] = 2; return p; }
+function stopChannel(c) {
+  if (!c.live) return;
+  c.live = false; c.gop = []; c.gopBytes = 0;
+  const pkt = frameOf(endedPacket());
+  for (const v of c.viewers) sendTo(v, pkt);
+}
+const shareUrl = (req, id) => `${(setting("site_url") || `${req.protocol}://${req.get("host")}`).replace(/\/+$/, "")}/watch/${id}`;
+const shareCors = (res) => { res.setHeader("Access-Control-Allow-Origin", "*"); res.setHeader("Cache-Control", "no-store"); };
+
+app.get("/api/share", requireUser, (req, res) => {
+  const id = shareIdOf(req.user.id), c = live.get(id);
+  res.json({ id, url: shareUrl(req, id), live: !!c?.live, viewers: c?.viewers.size || 0 });
+});
+app.post("/api/share/reset", requireUser, (req, res) => {
+  const old = q("SELECT id FROM shares WHERE user_id = ?").get(req.user.id);
+  if (old) { const c = live.get(old.id); if (c) { stopChannel(c); for (const v of c.viewers) v.end(); live.delete(old.id); } }
+  q("DELETE FROM shares WHERE user_id = ?").run(req.user.id);
+  const id = shareIdOf(req.user.id);
+  res.json({ id, url: shareUrl(req, id) });
+});
+app.post("/api/share/frames", requireUser, express.raw({ type: "application/octet-stream", limit: "8mb" }), (req, res) => {
+  const id = shareIdOf(req.user.id), c = channel(id), body = req.body;
+  if (!Buffer.isBuffer(body)) return res.status(400).json({ error: "Send application/octet-stream" });
+  c.live = true; c.last = now(); c.userId = req.user.id;
+  const out = [];
+  for (let o = 0; o + 4 <= body.length;) {
+    const len = body.readUInt32BE(o); o += 4;
+    if (len < 9 || o + len > body.length) break;
+    const payload = body.subarray(o, o + len); o += len;
+    if (payload[0] & 2) { stopChannel(c); continue; }
+    // keep everything since the last keyframe, so a viewer who joins now starts with a clean picture
+    const copy = Buffer.from(payload);
+    if (copy[0] & 1) { c.gop = []; c.gopBytes = 0; }
+    if (c.gopBytes + copy.length <= GOP_MAX_BYTES) { c.gop.push(copy); c.gopBytes += copy.length; }
+    out.push(...frameOf(copy));
+  }
+  if (out.length) for (const v of c.viewers) sendTo(v, out);
+  res.json({ viewers: c.viewers.size });
+});
+app.post("/api/share/stop", requireUser, (req, res) => {
+  const c = live.get(shareIdOf(req.user.id));
+  if (c) stopChannel(c);
+  res.json({ ok: true });
+});
+app.options("/api/share/:id/stream", (_req, res) => { shareCors(res); res.setHeader("Access-Control-Allow-Methods", "GET"); res.end(); });
+app.get("/api/share/:id/info", (req, res) => {
+  shareCors(res);
+  const ok = q("SELECT 1 FROM shares WHERE id = ?").get(String(req.params.id));
+  if (!ok) return res.status(404).json({ error: "Unknown link" });
+  const c = live.get(String(req.params.id));
+  res.json({ live: !!c?.live, viewers: c?.viewers.size || 0 });
+});
+app.get("/api/share/:id/stream", (req, res) => {
+  shareCors(res);
+  const id = String(req.params.id);
+  if (!q("SELECT 1 FROM shares WHERE id = ?").get(id)) return res.status(404).json({ error: "Unknown link" });
+  res.setHeader("Content-Type", "application/octet-stream");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  req.socket.setNoDelay(true);
+  const c = channel(id);
+  if (c.live && c.gop.length) sendTo(res, c.gop.flatMap(frameOf));
+  c.viewers.add(res);
+  const keep = setInterval(() => res.write(Buffer.alloc(4)), 10000);
+  res.on("close", () => { clearInterval(keep); c.viewers.delete(res); });
+});
+app.get("/watch/:id", (_req, res) => { res.setHeader("Cache-Control", "no-cache"); res.sendFile(path.join(__dirname, "public", "watch.html")); });
+setInterval(() => {
+  const t = now();
+  for (const [id, c] of live) {
+    if (c.live && t - c.last > SHARE_IDLE_MS) stopChannel(c);
+    if (!c.live && !c.viewers.size) live.delete(id);
+  }
+}, 5000).unref();
+
 // ---------- static ----------
 // no-cache = always revalidate (ETag), so UI updates show up immediately
 app.use(express.static(path.join(__dirname, "public"), { extensions: ["html"], setHeaders: (res) => res.setHeader("Cache-Control", "no-cache") }));

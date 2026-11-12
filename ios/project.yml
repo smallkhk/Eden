@@ -2,10 +2,17 @@ name: LiveChar
 options:
   bundleIdPrefix: app.livechar
   deploymentTarget:
-    iOS: "15.0"
+    iOS: "16.0"
+packages:
+  LiveKit:
+    url: https://github.com/livekit/client-sdk-swift
+    exactVersion: 2.19.0
+  LiveKitWebRTC:
+    url: https://github.com/livekit/webrtc-xcframework
+    exactVersion: 150.7871.04
 settings:
   base:
-    # server the app opens; CI overrides it with LIVECHAR_URL=... (changeable in the app: shake the phone)
+    # server the app opens; CI overrides it with LIVECHAR_URL=... (changeable in the app: Account → Server)
     LIVECHAR_URL: https://162-35-37-67.sslip.io
     MARKETING_VERSION: 1.0.0
     CURRENT_PROJECT_VERSION: 1
@@ -15,6 +22,9 @@ targets:
     type: application
     platform: iOS
     sources: [LiveChar]
+    dependencies:
+      - package: LiveKit
+      - package: LiveKitWebRTC
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.livechar.ios
@@ -37,10 +47,6 @@ targets:
           UIColorName: LaunchBg
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
-          UISceneConfigurations:
-            UIWindowSceneSessionRoleApplication:
-              - UISceneConfigurationName: Default
-                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).SceneDelegate
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -51,8 +57,9 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         NSCameraUsageDescription: LiveChar uses the camera to turn you into your character live.
-        NSMicrophoneUsageDescription: LiveChar may use the microphone when a page asks for it.
+        NSMicrophoneUsageDescription: LiveChar does not record sound; this is only asked if a video library requests it.
         NSPhotoLibraryAddUsageDescription: LiveChar saves your photos and recordings to Photos.
         NSPhotoLibraryUsageDescription: LiveChar lets you pick a character image from your photos.
+        UIFileSharingEnabled: false
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
