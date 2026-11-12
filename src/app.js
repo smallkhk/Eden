@@ -13,7 +13,7 @@ const ui = {
   file: $("file"), thumb: $("thumb"), clearImg: $("clearImg"), prompt: $("prompt"),
   start: $("start"), stop: $("stop"), apply: $("apply"), mirror: $("mirror"),
   vcamRow: $("vcamRow"), vcam: $("vcam"), vcamHint: $("vcamHint"),
-  rot: $("rot"), orient: $("orient"), orientRow: $("orientRow"),
+  camSel: $("camSel"), rot: $("rot"), orient: $("orient"), orientRow: $("orientRow"),
   outView: $("outView"), zoom: $("zoom"), zoomVal: $("zoomVal"), zoomReset: $("zoomReset"),
   inV: $("inV"), outV: $("outV"), status: $("status"), stats: $("stats"), note: $("note"),
 };
@@ -90,15 +90,67 @@ rawV.style.cssText = "position:fixed;width:1px;height:1px;opacity:0;pointer-even
 document.body.appendChild(rawV);
 
 // ---------- camera ----------
+// ---------- which camera to use ----------
+// Never use our own virtual cameras as the input: that would feed the output back into itself.
+const OWN_CAMERA = /livechar camera|softcam/i;
+const CAM_KEY = "livechar.camera";
+const savedCamera = () => { try { return localStorage.getItem(CAM_KEY) || ""; } catch { return ""; } };
+const saveCamera = (id) => { try { id ? localStorage.setItem(CAM_KEY, id) : localStorage.removeItem(CAM_KEY); } catch {} };
+let camWant = { w: 1280, h: 720, fps: 30 };
+
+async function realCameras() {
+  const all = await navigator.mediaDevices.enumerateDevices();
+  return all.filter((d) => d.kind === "videoinput" && !OWN_CAMERA.test(d.label));
+}
+// Fill the dropdown. Names are only known after the browser has been given camera permission.
+async function listCameras(currentId = "") {
+  const cams = await realCameras().catch(() => []);
+  const named = cams.filter((d) => d.label);
+  const keep = currentId || ui.camSel.value || savedCamera();
+  ui.camSel.replaceChildren(...(named.length ? named : [{ deviceId: "", label: "Default camera" }]).map((d) => {
+    const o = document.createElement("option"); o.value = d.deviceId; o.textContent = d.label; return o;
+  }));
+  if ([...ui.camSel.options].some((o) => o.value === keep)) ui.camSel.value = keep;
+  return cams;
+}
+const getCam = (deviceId) => navigator.mediaDevices.getUserMedia({
+  video: { width: { ideal: camWant.w }, height: { ideal: camWant.h }, frameRate: { ideal: camWant.fps }, ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: "user" }) },
+  audio: false,
+});
+
 async function openCamera(w, h, fps) {
-  cam = await navigator.mediaDevices.getUserMedia({
-    video: { width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: fps }, facingMode: "user" },
-    audio: false,
-  });
+  camWant = { w, h, fps };
+  const wanted = ui.camSel.value || savedCamera();
+  let stream;
+  try { stream = await getCam(wanted); }
+  catch (e) { if (!wanted || e?.name === "NotAllowedError") throw e; stream = await getCam(""); }   // saved camera unplugged
+  // The default the system picked may be one of our own virtual cameras: switch to a real one.
+  let track = stream.getVideoTracks()[0];
+  const cams = await realCameras().catch(() => []);
+  if (OWN_CAMERA.test(track.label)) {
+    stream.getTracks().forEach((t) => t.stop());
+    if (!cams.length) throw new Error("No real camera found. Plug in a webcam: LiveChar's own virtual camera can't be the input.");
+    stream = await getCam(cams[0].deviceId);
+    track = stream.getVideoTracks()[0];
+  }
+  cam = stream;
+  await listCameras(track.getSettings().deviceId || "");
   rawV.srcObject = cam;
   await rawV.play().catch(() => {});
   await new Promise((ok) => (rawV.videoWidth ? ok() : rawV.addEventListener("loadedmetadata", ok, { once: true })));
   return cam;
+}
+// Changing the camera works while live: the AI reads the canvas, so only the source behind it is swapped.
+async function switchCamera() {
+  saveCamera(ui.camSel.value);
+  if (!cam) return;
+  try {
+    const next = await getCam(ui.camSel.value);
+    cam.getTracks().forEach((t) => t.stop());
+    cam = next; rawV.srcObject = cam;
+    await rawV.play().catch(() => {});
+    setNote("Camera changed");
+  } catch (e) { setNote(`Could not open that camera (${e?.message || e?.name || e})`); }
 }
 function closeCamera() {
   clearInterval(capTimer); capTimer = null;
@@ -357,6 +409,8 @@ function syncEngine() {
   document.body.classList.toggle("portrait", isPortrait());
   if (window.livecharDesktop?.vcam?.active()) restartVcam();
 }
+ui.camSel.addEventListener("change", switchCamera);
+navigator.mediaDevices?.addEventListener?.("devicechange", () => listCameras().catch(() => {}));
 ui.engine.addEventListener("change", syncEngine);
 ui.orient.addEventListener("change", syncEngine);
 ui.mirror.addEventListener("change", () => document.body.classList.toggle("mirror", ui.mirror.checked));
@@ -530,6 +584,7 @@ async function boot() {
   ui.who.textContent = cfg.user.username; setBalance(cfg.user.balance); ui.adminLink.hidden = !cfg.user.isAdmin;
   ui.presetRow.hidden = !cfg.user.isAdmin;
   loadChars().catch(() => {});
+  listCameras().catch(() => {});
   for (const o of ui.engine.options) {
     const on = ENGINES[o.value].kind === "lucy" ? cfg.engines.lucy : cfg.engines.eden;
     const rate = cfg.rates[o.value];
