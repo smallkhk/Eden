@@ -18,6 +18,12 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private var extraRotation = 0
     private var lastSent: CFTimeInterval = 0
 
+    /// true when iOS lets the camera keep running while LiveChar is in the background (in PiP)
+    var worksInBackground: Bool {
+        if #available(iOS 16.0, *) { return session.isMultitaskingCameraAccessSupported }
+        return false
+    }
+
     /// Called on the camera queue with each processed frame.
     var onFrame: ((CVPixelBuffer, CMTime) -> Void)?
     private(set) var position: AVCaptureDevice.Position = .front
@@ -66,6 +72,10 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         }
         let newInput = try AVCaptureDeviceInput(device: device)
         session.beginConfiguration()
+        // keep the camera running behind picture-in-picture (needs the voip background mode, iOS 18+)
+        if #available(iOS 16.0, *), session.isMultitaskingCameraAccessSupported, !session.isMultitaskingCameraAccessEnabled {
+            session.isMultitaskingCameraAccessEnabled = true
+        }
         if let input { session.removeInput(input) }
         session.sessionPreset = session.canSetSessionPreset(.hd1280x720) ? .hd1280x720 : .high
         guard session.canAddInput(newInput) else { session.commitConfiguration(); throw APIError(message: "Can't open that camera", status: 0) }

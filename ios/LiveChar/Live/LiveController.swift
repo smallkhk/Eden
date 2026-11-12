@@ -77,6 +77,7 @@ final class LiveController: ObservableObject {
     @Published var recordStart = Date()
     @Published var viewers = 0
     @Published var shareProblem: String?
+    @Published var pipActive = false
 
     var config: AppConfig?
     var onBalance: (Double) -> Void = { _ in }
@@ -84,6 +85,7 @@ final class LiveController: ObservableObject {
     let camera = Camera()
     let hub = OutputHub()
     let router = FrameRouter()
+    let pip = PiPController()
     private weak var outputSurface: VideoSurface?
     private var engine: LiveEngine?
     private var bill: (id: String, live: Bool)?
@@ -93,13 +95,17 @@ final class LiveController: ObservableObject {
     private var stopping = false
 
     var engineDef: EngineDef { EngineDef.byID(engineID) }
+    /// camera + stream keep going when you switch to another app (PiP)
+    var keepsRunningInBackground: Bool { camera.worksInBackground && PiPController.supported }
     var isPortraitOutput: Bool { engineDef.kind == .lucy && portrait }
 
     init() {
         let router = self.router
         camera.onFrame = { pb, _ in router.frame(pb) }
         hub.onFirstFrame = { [weak self] in Task { @MainActor in self?.goLive() } }
-        hub.onSize = { [weak self] s in Task { @MainActor in self?.outputSize = s } }
+        hub.onSize = { [weak self] s in Task { @MainActor in self?.outputSize = s; self?.pip.setAspect(s) } }
+        hub.pipDisplay = pip.surface
+        pip.onActive = { [weak self] on in Task { @MainActor in self?.pipActive = on } }
         hub.onFPS = { [weak self] f in Task { @MainActor in self?.fps = f } }
     }
 
@@ -107,6 +113,7 @@ final class LiveController: ObservableObject {
         outputSurface = v
         v.framing = hub.framing
         hub.display = v
+        pip.attach(source: v)
         v.onFraming = { [weak self] f in
             self?.hub.framing = f
             Task { @MainActor in self?.zoom = f.zoom }
@@ -159,7 +166,9 @@ final class LiveController: ObservableObject {
             camera.configure(width: w, height: h, fps: def.fps)
             camera.setRotation(rotation)
             hub.reset()
+            AudioSessionSetup.activate()
             try await camera.start(position: backCamera ? .back : .front)
+            pip.setEnabled(true)
             if shareOn { startShare() }
 
             let events = makeEvents()
@@ -267,6 +276,8 @@ final class LiveController: ObservableObject {
         stopShare()
         await e?.stop()
         camera.stop()
+        pip.setEnabled(false)
+        AudioSessionSetup.deactivate()
         router.clear()
         router.input?.flush()
         hub.reset()

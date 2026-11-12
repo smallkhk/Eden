@@ -62,6 +62,7 @@ targets:
         NSPhotoLibraryAddUsageDescription: LiveChar saves your photos and recordings to Photos.
         NSPhotoLibraryUsageDescription: LiveChar lets you pick a character image from your photos.
         UIFileSharingEnabled: false
+        UIBackgroundModes: [voip, audio]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
 

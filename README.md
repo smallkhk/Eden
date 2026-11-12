@@ -106,7 +106,9 @@ Native SwiftUI app, iPhone and iPad, iOS 16+. Same server, accounts, balance and
 - Pinch to zoom the output (1x–4x), drag, double-tap to reset. Photo and Record save to Photos with the zoom.
 - Characters (gallery + Photos), prompt, apply while live, front/back camera, rotation, mirror, portrait/landscape (Lucy).
 - Account: balance, USDT top-up (QR, txid check), vouchers, history, email, password, live link, admin panel (web).
-- Stops cleanly when the app leaves the screen (iOS pauses the camera in the background).
+- **Keeps running when you leave the app:** the output floats in picture-in-picture and the camera, the engine and
+  the live link keep going (video-call PiP + `voip` background mode + multitasking camera access, iOS 18+).
+  Starts by itself when you switch apps while live, or with the PiP button. Devices that can't do it stop cleanly.
 
 No virtual camera on iOS: Apple does not let apps create one. Use the live link below instead.
 
@@ -146,4 +148,4 @@ no virtual camera, no driver.
 The same `extension/` folder is built into the iOS app as a Safari extension ("LiveChar Camera"), Safari 18+.
 After installing the app: Settings → Apps → Safari → Extensions → LiveChar Camera → turn on, and allow it on all
 websites. Then in Safari tap the extensions button (puzzle piece in the address bar) → LiveChar Camera, paste the link.
-Use it on a different iPhone/iPad than the one running LiveChar: iOS pauses LiveChar's camera when Safari is in front.
+Works on the same iPhone: go live in LiveChar, switch to Safari, and LiveChar keeps streaming from its PiP window.

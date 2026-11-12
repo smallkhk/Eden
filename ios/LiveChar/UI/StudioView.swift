@@ -28,8 +28,9 @@ struct StudioView: View {
         .screenBackground()
         .sheet(isPresented: $showAccount) { AccountView().environmentObject(app).environmentObject(live) }
         .onChange(of: phase) { p in
-            if p == .background, live.running || live.starting {
-                Task { await live.stop(reason: "Stopped: LiveChar left the screen (iOS pauses the camera in the background)") }
+            // with PiP the camera keeps running behind other apps; without it iOS pauses the camera, so stop billing
+            if p == .background, live.running || live.starting, !live.keepsRunningInBackground {
+                Task { await live.stop(reason: "Stopped: this iPhone doesn't let the camera run in the background") }
             }
         }
     }
@@ -121,7 +122,11 @@ struct StudioView: View {
                     .buttonStyle(RoundTool())
             }
             if live.running {
-                if !showInput { Button { withAnimation { showInput = true } } label: { Image(systemName: "pip") }.buttonStyle(RoundTool()) }
+                if !showInput { Button { withAnimation { showInput = true } } label: { Image(systemName: "rectangle.inset.bottomleft.filled") }.buttonStyle(RoundTool()) }
+                if PiPController.supported {
+                    Button { live.pipActive ? live.pip.stop() : live.pip.start() } label: { Image(systemName: live.pipActive ? "pip.exit" : "pip.enter") }
+                        .buttonStyle(RoundTool(active: live.pipActive))
+                }
                 Button { Task { await live.takePhoto() } } label: { Image(systemName: "camera.fill") }.buttonStyle(RoundTool())
                 Button { Task { await live.toggleRecording() } } label: {
                     if live.recording {
@@ -202,7 +207,7 @@ struct StudioView: View {
                 Toggle(isOn: Binding(get: { live.shareOn }, set: { live.setShare($0) })) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Share live to my link").font(.subheadline.weight(.semibold))
-                        Text("Watch the output in any browser, or use it as a camera in Chrome with the LiveChar extension. Link is in Account.")
+                        Text("Watch the output in any browser, or use it as a camera in Chrome/Safari with the LiveChar Camera extension. Leave the app while live and it keeps going in a floating window. Link is in Account.")
                             .font(.caption).foregroundStyle(Theme.dim)
                     }
                 }

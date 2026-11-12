@@ -16,6 +16,7 @@ final class OutputHub {
     }
 
     weak var display: VideoSurface?
+    weak var pipDisplay: VideoSurface?
     private(set) var lastFrame: CVPixelBuffer?
     private var recorder: Recorder?
     private var _streamer: ShareStreamer?
@@ -38,6 +39,7 @@ final class OutputHub {
             self.gotFirst = false
             self.lastFrame = nil
             self.display?.flush()
+            self.pipDisplay?.flush()
         }
     }
 
@@ -51,6 +53,7 @@ final class OutputHub {
         if s != size { size = s; DispatchQueue.main.async { self.onSize?(s) } }
         if !gotFirst { gotFirst = true; DispatchQueue.main.async { self.onFirstFrame?() } }
         display?.show(pb)
+        pipDisplay?.show(pb)
 
         fpsCount += 1
         let now = CACurrentMediaTime()
