@@ -65,8 +65,13 @@ final class ShareStreamer {
 
     private func packetize(_ sb: CMSampleBuffer) {
         guard !stopped, let block = CMSampleBufferGetDataBuffer(sb) else { return }
-        let attachments = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[CFString: Any]]
-        let isKey = !((attachments?.first?[kCMSampleAttachmentKey_NotSync] as? Bool) ?? false)
+        var isKey = true
+        if let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false), CFArrayGetCount(arr) > 0 {
+            let dict = unsafeBitCast(CFArrayGetValueAtIndex(arr, 0), to: CFDictionary.self)
+            if let v = CFDictionaryGetValue(dict, Unmanaged.passUnretained(kCMSampleAttachmentKey_NotSync).toOpaque()) {
+                isKey = !CFBooleanGetValue(unsafeBitCast(v, to: CFBoolean.self))
+            }
+        }
         if waitKey && !isKey { return }
         if isKey { waitKey = false }
 

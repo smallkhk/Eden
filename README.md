@@ -97,18 +97,46 @@ SmartScreen will show a warning on first run.
 
 ## iOS app (`ios/`)
 
-Native Swift shell (WKWebView) around the same web app, iPhone and iPad, iOS 15+.
+Native SwiftUI app, iPhone and iPad, iOS 16+. Same server, accounts, balance and billing as the web app.
 
-- Camera works only for your LiveChar server; links to other sites open in Safari.
-- **Photo / Record** save straight to Photos (falls back to the share sheet).
-- **Pinch** the output to zoom, drag to move, double-tap to reset (also works in mobile browsers).
-- Screen stays awake while the app is open. **Shake** the phone for Reload / Change server.
-- No virtual camera on iOS: Apple does not let apps create one.
+- **Engines, natively:** Lucy = Decart control socket + LiveKit (official Swift SDK). Eden 5B/14B = WebRTC to fal's
+  WMA bridge, negotiated through `/api/fal/proxy` (keys stay on the server).
+- **Smooth output:** camera → GPU crop/scale (Core Image on Metal) → engine; AI frames are shown with
+  `AVSampleBufferDisplayLayer` (hardware composited, no copies, no main-thread work).
+- Pinch to zoom the output (1x–4x), drag, double-tap to reset. Photo and Record save to Photos with the zoom.
+- Characters (gallery + Photos), prompt, apply while live, front/back camera, rotation, mirror, portrait/landscape (Lucy).
+- Account: balance, USDT top-up (QR, txid check), vouchers, history, email, password, live link, admin panel (web).
+- Stops cleanly when the app leaves the screen (iOS pauses the camera in the background).
+
+No virtual camera on iOS: Apple does not let apps create one. Use the live link below instead.
 
 ### Build with GitHub Actions
 
 Actions → "Build iOS app" → Run workflow (also runs on pushes touching `ios/`). Download `LiveChar-iOS`
-from the run's artifacts: it holds `LiveChar.ipa`, unsigned. Install it with SideStore, AltStore, Sideloadly or esign
-(they sign it with your Apple ID). Set "release version" to also attach the .ipa to release `v<version>`.
-
+from the run's artifacts: `LiveChar.ipa`, unsigned. Install it with SideStore, AltStore, Sideloadly or esign.
+Set "release version" to also attach the .ipa to release `v<version>`.
 The server address comes from the `LIVECHAR_URL` repo variable, else the one in `ios/project.yml`.
+
+## Live link (share the iOS output)
+
+Each account has a fixed link, `https://your-server/watch/<id>` (Account → Live link in the app; "Make a new link"
+replaces it). With **Share live to my link** on, the app encodes the output to H.264 on the phone's hardware
+encoder and posts it to the server, which passes it to everyone watching. Plain HTTPS both ways, so nothing extra
+is needed in Nginx (`X-Accel-Buffering: no` is sent on the stream). Delay is about a third of a second plus your
+upload. Viewers: the `/watch/<id>` page (Chrome, Edge, Safari 16.4+), and the Chrome extension.
+
+Endpoints: `GET /api/share`, `POST /api/share/reset`, `POST /api/share/frames` (app), `POST /api/share/stop`,
+`GET /api/share/<id>/stream` and `/info` (public, CORS open). Player: `public/lc-player.js`.
+
+## Chrome extension (`extension/`): the iPhone output as your camera in Chrome
+
+Makes Chrome hand the live link's video to any site that asks for a camera (Meet, Zoom web, Discord, etc.):
+no virtual camera, no driver.
+
+1. Chrome → `chrome://extensions` → turn on **Developer mode** → **Load unpacked** → pick the `extension` folder.
+2. Click the extension icon, paste your live link. A preview shows when the phone is live.
+3. **Use as my camera in Chrome** on. **For every camera request** on = sites get it without choosing
+   (real cameras are hidden from sites); off = pick "LiveChar (iPhone)" in the site's camera list.
+4. Reload sites that were already open. The microphone stays your real one.
+
+`extension/player.js` is a copy of `public/lc-player.js`: keep them the same.

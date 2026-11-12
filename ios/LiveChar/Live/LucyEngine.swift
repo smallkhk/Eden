@@ -125,9 +125,13 @@ final class LucyEngine: NSObject, LiveEngine, RoomDelegate, @unchecked Sendable 
 
     private func request(_ m: [String: Any], ack: String) async throws -> [String: Any] {
         let once = Once<[String: Any]>()
-        lock.lock(); ackWaiter = (ack, once); lock.unlock()
+        setAck(ack, once)
         try await send(m)
         return try await once.wait(timeout: 30, "Lucy did not confirm the change")
+    }
+
+    private func setAck(_ match: String, _ once: Once<[String: Any]>) {
+        lock.lock(); ackWaiter = (match, once); lock.unlock()
     }
 
     private func resolveAck(_ msg: [String: Any]?, _ error: Error?) {

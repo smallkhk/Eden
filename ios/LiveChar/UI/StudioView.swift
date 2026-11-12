@@ -284,7 +284,8 @@ struct CharacterStrip: View {
     @State private var error = ""
 
     var body: some View {
-        Card {
+        let ref = live.refImage
+        return Card {
             HStack {
                 Text("CHARACTER").font(.caption.weight(.bold)).foregroundStyle(Theme.dim)
                 Spacer()
@@ -297,7 +298,7 @@ struct CharacterStrip: View {
                 HStack(spacing: 10) {
                     PhotosPicker(selection: $pick, matching: .images) {
                         ZStack {
-                            if let img = live.refImage {
+                            if let img = ref {
                                 Image(uiImage: img).resizable().scaledToFill()
                             } else {
                                 Image(systemName: "plus").font(.system(size: 22, weight: .semibold)).foregroundStyle(Theme.char)
@@ -306,7 +307,7 @@ struct CharacterStrip: View {
                         .frame(width: 66, height: 66)
                         .background(Theme.well)
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(live.refImage != nil ? Theme.char : Theme.line, lineWidth: live.refImage != nil ? 2 : 1))
+                        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ref != nil ? Theme.char : Theme.line, lineWidth: ref != nil ? 2 : 1))
                     }
                     ForEach(characters) { c in
                         CharacterThumb(character: c)
