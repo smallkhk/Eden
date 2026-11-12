@@ -8,11 +8,11 @@ on:
   workflow_dispatch:
     inputs:
       server_url:
-        description: "LiveChar server URL to bake in (https://...). Empty = ask on first run."
+        description: "Leave empty. (Only fill to build for a different server URL.)"
         required: false
         default: ""
       release_version:
-        description: "Publish as a release with this version (e.g. 1.1.0). Installed apps update to it. Empty = build only."
+        description: "Release version, e.g. 1.2.0. Empty = build only, no release."
         required: false
         default: ""
 
@@ -139,7 +139,30 @@ jobs:
         run: |
           $version = "${{ inputs.release_version || github.ref_name }}".TrimStart("v")
           npm version $version --no-git-tag-version --allow-same-version
-          npm run release
+          npm run dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $exe = "LiveChar-Setup-$version.exe"
+          # the file installed apps read to find the update
+          if (-not (Test-Path "dist/latest.yml")) {
+            $hash = [Convert]::ToBase64String([System.Security.Cryptography.SHA512]::Create().ComputeHash([IO.File]::ReadAllBytes("$PWD/dist/$exe")))
+            $size = (Get-Item "dist/$exe").Length
+            $date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+            "version: $version`nfiles:`n  - url: $exe`n    sha512: $hash`n    size: $size`npath: $exe`nsha512: $hash`nreleaseDate: '$date'`n" | Set-Content -NoNewline -Encoding utf8 dist/latest.yml
+          }
+          Get-Content dist/latest.yml
+
+          # upload with the GitHub CLI: create the release if needed, replace files if it exists
+          $files = @("dist/$exe", "dist/latest.yml")
+          if (Test-Path "dist/$exe.blockmap") { $files += "dist/$exe.blockmap" }
+          gh release view "v$version" --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload "v$version" @files --clobber --repo $env:GITHUB_REPOSITORY
+          } else {
+            gh release create "v$version" @files --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "LiveChar $version" --notes "Windows installer: download $exe below. Windows SmartScreen shows a warning because the installer is not code-signed: choose More info, then Run anyway."
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release edit "v$version" --repo $env:GITHUB_REPOSITORY --draft=false --latest
 
       - uses: actions/upload-artifact@v4
         with:
