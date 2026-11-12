@@ -442,15 +442,24 @@ ui.outView.addEventListener("wheel", (e) => { e.preventDefault(); setView(view.z
 ui.zoom.addEventListener("input", () => setView(+ui.zoom.value));
 ui.zoomReset.addEventListener("click", () => setView(1, 0, 0));
 ui.outView.addEventListener("dblclick", () => setView(1, 0, 0));
-let drag = null;
-ui.outView.addEventListener("pointerdown", (e) => { if (view.z > 1) { drag = { x: e.clientX, y: e.clientY }; ui.outView.setPointerCapture(e.pointerId); } });
+// touch: pinch with two fingers to zoom (phones, tablets, the iOS app)
+let drag = null, pinch = null;
+const touches = new Map();
+const spread = () => { const [a, b] = [...touches.values()]; return Math.hypot(a.x - b.x, a.y - b.y) || 1; };
+ui.outView.addEventListener("pointerdown", (e) => {
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (touches.size === 2) { pinch = { d: spread(), z: view.z }; drag = null; ui.outView.setPointerCapture(e.pointerId); return; }
+  if (view.z > 1) { drag = { x: e.clientX, y: e.clientY }; ui.outView.setPointerCapture(e.pointerId); }
+});
 ui.outView.addEventListener("pointermove", (e) => {
+  if (touches.has(e.pointerId)) touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinch && touches.size >= 2) return setView(pinch.z * spread() / pinch.d);
   if (!drag) return;
   const r = ui.outView.getBoundingClientRect(), dir = ui.mirror.checked ? -1 : 1;
   setView(view.z, view.ox + dir * (e.clientX - drag.x) / (r.width * view.z), view.oy + (e.clientY - drag.y) / (r.height * view.z));
   drag = { x: e.clientX, y: e.clientY };
 });
-const endDrag = () => { drag = null; };
+const endDrag = (e) => { touches.delete(e.pointerId); if (touches.size < 2) pinch = null; drag = null; };
 ui.outView.addEventListener("pointerup", endDrag); ui.outView.addEventListener("pointercancel", endDrag);
 ui.mirror.addEventListener("change", () => setView());
 

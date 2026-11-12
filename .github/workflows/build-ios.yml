@@ -1,0 +1,82 @@
+name: Build iOS app
+
+on:
+  push:
+    branches: [main]
+    paths: ["ios/**", ".github/workflows/build-ios.yml"]
+  workflow_dispatch:
+    inputs:
+      server_url:
+        description: "Leave empty. (Only fill to build for a different server URL.)"
+        required: false
+        default: ""
+      release_version:
+        description: "Release version, e.g. 1.2.0. Empty = build only. Adds the .ipa to release v<version>."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick the newest stable Xcode
+        run: |
+          X=$(ls -d /Applications/Xcode_*.app | grep -viE 'beta|rc' | sort -V | tail -1)
+          sudo xcode-select -s "$X"
+          xcodebuild -version
+
+      - name: Generate the Xcode project
+        working-directory: ios
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build (unsigned)
+        working-directory: ios
+        env:
+          SERVER_URL: ${{ github.event.inputs.server_url || vars.LIVECHAR_URL }}
+          VERSION: ${{ inputs.release_version }}
+        run: |
+          EXTRA=()
+          [ -n "$SERVER_URL" ] && EXTRA+=("LIVECHAR_URL=$SERVER_URL")
+          [ -n "$VERSION" ] && EXTRA+=("MARKETING_VERSION=${VERSION#v}")
+          xcodebuild -project LiveChar.xcodeproj -scheme LiveChar -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} "${EXTRA[@]}" build | tail -40
+          test "${PIPESTATUS[0]}" -eq 0
+          /usr/libexec/PlistBuddy -c "Print :LiveCharURL" build/Build/Products/Release-iphoneos/LiveChar.app/Info.plist
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" build/Build/Products/Release-iphoneos/LiveChar.app/Info.plist
+
+      - name: Package .ipa
+        working-directory: ios
+        run: |
+          rm -rf Payload && mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/LiveChar.app Payload/
+          zip -qry LiveChar.ipa Payload
+          ls -lh LiveChar.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LiveChar-iOS
+          path: ios/LiveChar.ipa
+          if-no-files-found: error
+
+      - name: Add to release
+        if: ${{ inputs.release_version }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          V="${{ inputs.release_version }}"; V="v${V#v}"
+          cp ios/LiveChar.ipa "LiveChar-${V#v}.ipa"
+          if gh release view "$V" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$V" "LiveChar-${V#v}.ipa" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$V" "LiveChar-${V#v}.ipa" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "LiveChar $V" --notes "iOS: install LiveChar-${V#v}.ipa with SideStore, AltStore, Sideloadly or esign."
+          fi

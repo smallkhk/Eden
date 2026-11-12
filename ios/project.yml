@@ -1,0 +1,58 @@
+name: LiveChar
+options:
+  bundleIdPrefix: app.livechar
+  deploymentTarget:
+    iOS: "15.0"
+settings:
+  base:
+    # server the app opens; CI overrides it with LIVECHAR_URL=... (changeable in the app: shake the phone)
+    LIVECHAR_URL: https://162-35-37-67.sslip.io
+    MARKETING_VERSION: 1.0.0
+    CURRENT_PROJECT_VERSION: 1
+    SWIFT_VERSION: 5.0
+targets:
+  LiveChar:
+    type: application
+    platform: iOS
+    sources: [LiveChar]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.livechar.ios
+        PRODUCT_NAME: LiveChar
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: NO
+    info:
+      path: LiveChar/Info.plist
+      properties:
+        CFBundleDisplayName: LiveChar
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LiveCharURL: $(LIVECHAR_URL)
+        LSRequiresIPhoneOS: true
+        UIRequiresFullScreen: false
+        UIStatusBarStyle: UIStatusBarStyleLightContent
+        UIViewControllerBasedStatusBarAppearance: true
+        UILaunchScreen:
+          UIColorName: LaunchBg
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).SceneDelegate
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSCameraUsageDescription: LiveChar uses the camera to turn you into your character live.
+        NSMicrophoneUsageDescription: LiveChar may use the microphone when a page asks for it.
+        NSPhotoLibraryAddUsageDescription: LiveChar saves your photos and recordings to Photos.
+        NSPhotoLibraryUsageDescription: LiveChar lets you pick a character image from your photos.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true

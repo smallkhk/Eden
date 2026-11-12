@@ -94,3 +94,21 @@ The app loads your LiveChar server, so the server must be running on HTTPS first
 
 The installer needs admin rights once (it registers the camera). It is unsigned, so Windows
 SmartScreen will show a warning on first run.
+
+## iOS app (`ios/`)
+
+Native Swift shell (WKWebView) around the same web app, iPhone and iPad, iOS 15+.
+
+- Camera works only for your LiveChar server; links to other sites open in Safari.
+- **Photo / Record** save straight to Photos (falls back to the share sheet).
+- **Pinch** the output to zoom, drag to move, double-tap to reset (also works in mobile browsers).
+- Screen stays awake while the app is open. **Shake** the phone for Reload / Change server.
+- No virtual camera on iOS: Apple does not let apps create one.
+
+### Build with GitHub Actions
+
+Actions → "Build iOS app" → Run workflow (also runs on pushes touching `ios/`). Download `LiveChar-iOS`
+from the run's artifacts: it holds `LiveChar.ipa`, unsigned. Install it with SideStore, AltStore, Sideloadly or esign
+(they sign it with your Apple ID). Set "release version" to also attach the .ipa to release `v<version>`.
+
+The server address comes from the `LIVECHAR_URL` repo variable, else the one in `ios/project.yml`.
