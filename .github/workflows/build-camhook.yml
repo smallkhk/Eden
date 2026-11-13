@@ -1,0 +1,33 @@
+name: Build LiveChar camera hook (dylib)
+
+on:
+  push:
+    branches: [main]
+    paths: ["camhook/**", ".github/workflows/build-camhook.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pick the newest stable Xcode
+        run: |
+          X=$(ls -d /Applications/Xcode_*.app | grep -viE 'beta|rc' | sort -V | tail -1)
+          sudo xcode-select -s "$X"
+      - name: Compile the dylib (unsigned, arm64)
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang -dynamiclib -arch arm64 -isysroot "$SDK" -mios-version-min=14.0 -fobjc-arc -fmodules \
+            -Wall -Wno-deprecated-declarations \
+            -framework Foundation -framework UIKit -framework AVFoundation \
+            -framework CoreMedia -framework CoreVideo -framework VideoToolbox -framework QuartzCore \
+            -install_name @executable_path/LiveCharHook.dylib \
+            camhook/LiveCharHook/LiveCharHook.m -o LiveCharHook.dylib
+          file LiveCharHook.dylib
+          otool -L LiveCharHook.dylib | head
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LiveCharHook-dylib
+          path: LiveCharHook.dylib
+          if-no-files-found: error

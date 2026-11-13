@@ -24,3 +24,4 @@ camtest/CamTest.ipa
 camtest/CamTest.xcodeproj/
 camtest/CamTest/Info.plist
 camtest/build/
+camhook/*.dylib

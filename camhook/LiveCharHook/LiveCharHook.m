@@ -1,0 +1,386 @@
+// LiveCharHook — an eSign-injectable dylib that replaces the camera in the host app with a LiveChar
+// live feed (https://server/watch/<id>).
+//
+//   * Hooks AVCaptureVideoDataOutput's frame delegate: apps that read camera frames get LiveChar frames.
+//   * Overlays an AVSampleBufferDisplayLayer on every AVCaptureVideoPreviewLayer: the on-screen preview
+//     shows LiveChar (this is what Cam Test shows).
+//   * On the first camera use, asks for the watch link and remembers it (host app's NSUserDefaults,
+//     key "livechar.hooklink"; or a Documents/livechar.txt file).
+//
+// Video only (no voice): a camera has no audio. Built unsigned; eSign signs it when it injects.
+//
+// Honest scope: proven to compile. On-device behaviour (does a given app's camera actually get replaced)
+// depends on that app and must be tested on the phone. Cam Test's preview is the reference case.
+
+#import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+#import <AVFoundation/AVFoundation.h>
+#import <CoreMedia/CoreMedia.h>
+#import <CoreVideo/CoreVideo.h>
+#import <VideoToolbox/VideoToolbox.h>
+#import <QuartzCore/QuartzCore.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
+
+static NSString *const kLinkKey = @"livechar.hooklink";
+
+#pragma mark - feed (download + H.264 decode -> latest CVPixelBuffer)
+
+@interface LCFeed : NSObject <NSURLSessionDataDelegate>
+@property (class, readonly) LCFeed *shared;
+- (void)ensureRunning;
+- (CVPixelBufferRef)copyLatest CF_RETURNS_RETAINED;   // nil if nothing decoded yet
+@end
+
+static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfoFlags flags,
+                       CVImageBufferRef image, CMTime pts, CMTime dur);
+
+@implementation LCFeed {
+    NSURLSession *_session;
+    NSURLSessionDataTask *_task;
+    NSMutableData *_buf;
+    BOOL _running;
+    NSData *_sps, *_pps;
+    CMVideoFormatDescriptionRef _format;
+    VTDecompressionSessionRef _decoder;
+    BOOL _needKey;
+    CVPixelBufferRef _latest;
+    NSLock *_lock;
+}
+
++ (LCFeed *)shared {
+    static LCFeed *s; static dispatch_once_t once;
+    dispatch_once(&once, ^{ s = [LCFeed new]; });
+    return s;
+}
+
+- (instancetype)init {
+    if ((self = [super init])) {
+        _lock = [NSLock new];
+        _needKey = YES;
+        NSURLSessionConfiguration *c = [NSURLSessionConfiguration defaultSessionConfiguration];
+        c.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+        c.timeoutIntervalForRequest = 30;
+        _session = [NSURLSession sessionWithConfiguration:c delegate:self delegateQueue:nil];
+    }
+    return self;
+}
+
+- (NSURL *)streamURL {
+    NSString *link = [[NSUserDefaults standardUserDefaults] stringForKey:kLinkKey];
+    if (link.length == 0) {
+        NSString *file = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/livechar.txt"];
+        link = [[NSString stringWithContentsOfFile:file encoding:NSUTF8StringEncoding error:nil]
+                stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    }
+    if (link.length == 0) return nil;
+    NSURL *u = [NSURL URLWithString:link];
+    if (!u.host || !([u.scheme isEqualToString:@"https"] || [u.scheme isEqualToString:@"http"])) return nil;
+    NSArray *parts = u.pathComponents;
+    NSUInteger i = [parts indexOfObject:@"watch"];
+    if (i == NSNotFound || i + 1 >= parts.count) return nil;
+    NSURLComponents *c = [NSURLComponents new];
+    c.scheme = u.scheme; c.host = u.host; c.port = u.port;
+    c.path = [NSString stringWithFormat:@"/api/share/%@/stream", parts[i + 1]];
+    return c.URL;
+}
+
+- (void)ensureRunning {
+    @synchronized (self) {
+        if (_running) return;
+        NSURL *url = [self streamURL];
+        if (!url) return;
+        _running = YES;
+        _buf = [NSMutableData data];
+        _task = [_session dataTaskWithURL:url];
+        [_task resume];
+    }
+}
+
+- (void)URLSession:(NSURLSession *)s dataTask:(NSURLSessionDataTask *)t didReceiveData:(NSData *)data {
+    [_buf appendData:data];
+    const uint8_t *b = _buf.bytes;
+    NSUInteger n = _buf.length, o = 0;
+    while (n - o >= 4) {
+        uint32_t len = (b[o] << 24) | (b[o+1] << 16) | (b[o+2] << 8) | b[o+3];
+        if (n - o - 4 < len) break;
+        if (len >= 9) [self packet:b + o + 4 length:len];
+        o += 4 + len;
+    }
+    if (o > 0) { [_buf replaceBytesInRange:NSMakeRange(0, o) withBytes:NULL length:0]; }
+}
+
+- (void)URLSession:(NSURLSession *)s task:(NSURLSessionTask *)t didCompleteWithError:(NSError *)e {
+    @synchronized (self) { _running = NO; }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_global_queue(0, 0), ^{
+        [self ensureRunning];
+    });
+}
+
+- (void)packet:(const uint8_t *)p length:(NSUInteger)len {
+    uint8_t flags = p[0];
+    if (flags & 2) { _needKey = YES; return; }   // stream ended
+    if (flags & 4) return;                        // audio — a camera has no sound
+    BOOL key = (flags & 1) != 0;
+    const uint8_t *data = p + 9;
+    NSUInteger dlen = len - 9;
+    // split Annex B into NAL units
+    NSMutableArray<NSData *> *slices = [NSMutableArray array];
+    NSInteger start = -1;
+    for (NSUInteger i = 0; i + 3 <= dlen; ) {
+        if (data[i] == 0 && data[i+1] == 0 && (data[i+2] == 1 || (i + 3 < dlen && data[i+2] == 0 && data[i+3] == 1))) {
+            NSUInteger sc = data[i+2] == 1 ? 3 : 4;
+            if (start >= 0) [self classify:[NSData dataWithBytes:data + start length:i - start] into:slices];
+            start = i + sc; i += sc;
+        } else i++;
+    }
+    if (start >= 0 && (NSUInteger)start < dlen) [self classify:[NSData dataWithBytes:data + start length:dlen - start] into:slices];
+    if (!_decoder && _sps && _pps) [self buildDecoder];
+    if (key) _needKey = NO;
+    if (_needKey || !_decoder || slices.count == 0) return;
+
+    NSMutableData *avcc = [NSMutableData data];
+    for (NSData *s in slices) {
+        uint32_t l = CFSwapInt32HostToBig((uint32_t)s.length);
+        [avcc appendBytes:&l length:4];
+        [avcc appendData:s];
+    }
+    CMBlockBufferRef block = NULL;
+    if (CMBlockBufferCreateWithMemoryBlock(NULL, NULL, avcc.length, NULL, NULL, 0, avcc.length, 0, &block) != noErr) return;
+    CMBlockBufferReplaceDataBytes(avcc.bytes, block, 0, avcc.length);
+    CMSampleBufferRef sb = NULL;
+    size_t sizes[1] = { avcc.length };
+    if (CMSampleBufferCreateReady(NULL, block, _format, 1, 0, NULL, 1, sizes, &sb) == noErr && sb) {
+        VTDecompressionSessionDecodeFrame(_decoder, sb, kVTDecodeFrame_EnableAsynchronousDecompression, NULL, NULL);
+        CFRelease(sb);
+    }
+    CFRelease(block);
+}
+
+- (void)classify:(NSData *)nal into:(NSMutableArray<NSData *> *)slices {
+    if (nal.length == 0) return;
+    uint8_t type = ((const uint8_t *)nal.bytes)[0] & 0x1f;
+    if (type == 7) { if (![nal isEqualToData:_sps]) { _sps = nal; [self dropDecoder]; } }
+    else if (type == 8) { if (![nal isEqualToData:_pps]) { _pps = nal; [self dropDecoder]; } }
+    else [slices addObject:nal];
+}
+
+- (void)dropDecoder {
+    if (_decoder) { VTDecompressionSessionInvalidate(_decoder); CFRelease(_decoder); _decoder = NULL; }
+    if (_format) { CFRelease(_format); _format = NULL; }
+}
+
+- (void)buildDecoder {
+    const uint8_t *ps[2] = { _sps.bytes, _pps.bytes };
+    size_t sz[2] = { _sps.length, _pps.length };
+    CMVideoFormatDescriptionRef fmt = NULL;
+    if (CMVideoFormatDescriptionCreateFromH264ParameterSets(NULL, 2, ps, sz, 4, &fmt) != noErr) return;
+    _format = fmt;
+    NSDictionary *attrs = @{ (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+                             (id)kCVPixelBufferIOSurfacePropertiesKey: @{} };
+    VTDecompressionOutputCallbackRecord cb = { lcDecodeCB, (__bridge void *)self };
+    VTDecompressionSessionRef dec = NULL;
+    if (VTDecompressionSessionCreate(NULL, fmt, NULL, (__bridge CFDictionaryRef)attrs, &cb, &dec) == noErr) {
+        VTSessionSetProperty(dec, kVTDecompressionPropertyKey_RealTime, kCFBooleanTrue);
+        _decoder = dec;
+    }
+}
+
+- (void)storeFrame:(CVImageBufferRef)image {
+    if (!image) return;
+    CVPixelBufferRef px = (CVPixelBufferRef)image;
+    CVPixelBufferRetain(px);
+    [_lock lock];
+    CVPixelBufferRef old = _latest; _latest = px;
+    [_lock unlock];
+    if (old) CVPixelBufferRelease(old);
+}
+
+- (CVPixelBufferRef)copyLatest {
+    [_lock lock];
+    CVPixelBufferRef px = _latest ? (CVPixelBufferRef)CVPixelBufferRetain(_latest) : NULL;
+    [_lock unlock];
+    return px;
+}
+
+@end
+
+static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfoFlags flags,
+                       CVImageBufferRef image, CMTime pts, CMTime dur) {
+    if (status == noErr && image) [(__bridge LCFeed *)outRef storeFrame:image];
+}
+
+#pragma mark - helpers
+
+// Wrap a pixel buffer as a CMSampleBuffer, reusing timing from `orig` when given.
+static CMSampleBufferRef LCWrap(CVPixelBufferRef px, CMSampleBufferRef orig) {
+    CMVideoFormatDescriptionRef fmt = NULL;
+    if (CMVideoFormatDescriptionCreateForImageBuffer(NULL, px, &fmt) != noErr) return NULL;
+    CMSampleTimingInfo timing;
+    if (orig) { CMSampleBufferGetSampleTimingInfo(orig, 0, &timing); }
+    else { timing.duration = kCMTimeInvalid; timing.presentationTimeStamp = CMClockGetTime(CMClockGetHostTimeClock()); timing.decodeTimeStamp = kCMTimeInvalid; }
+    CMSampleBufferRef out = NULL;
+    OSStatus st = CMSampleBufferCreateReadyWithImageBuffer(NULL, px, fmt, &timing, &out);
+    CFRelease(fmt);
+    return st == noErr ? out : NULL;
+}
+
+static UIViewController *LCTopVC(void) {
+    UIWindow *key = nil;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if ([scene isKindOfClass:UIWindowScene.class] && scene.activationState == UISceneActivationStateForegroundActive) {
+            for (UIWindow *w in ((UIWindowScene *)scene).windows) if (w.isKeyWindow) { key = w; break; }
+            if (!key) key = ((UIWindowScene *)scene).windows.firstObject;
+        }
+    }
+    UIViewController *vc = key.rootViewController;
+    while (vc.presentedViewController) vc = vc.presentedViewController;
+    return vc;
+}
+
+// Ask for the watch link once, then start the feed.
+static void LCEnsureLink(void) {
+    static BOOL asking = NO;
+    if ([[NSUserDefaults standardUserDefaults] stringForKey:kLinkKey].length > 0) { [LCFeed.shared ensureRunning]; return; }
+    if (asking) return;
+    asking = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *top = LCTopVC();
+        if (!top) { asking = NO; return; }
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"LiveChar camera"
+            message:@"Paste your LiveChar live link (from the app: Account → Live link). Turn on “Share live to my link” there." preferredStyle:UIAlertControllerStyleAlert];
+        [a addTextFieldWithConfigurationHandler:^(UITextField *f) {
+            f.placeholder = @"https://…/watch/…"; f.keyboardType = UIKeyboardTypeURL;
+            f.autocapitalizationType = UITextAutocapitalizationTypeNone; f.autocorrectionType = UITextAutocorrectionTypeNo;
+            NSString *clip = UIPasteboard.generalPasteboard.string;
+            if ([clip containsString:@"/watch/"]) f.text = clip;
+        }];
+        [a addAction:[UIAlertAction actionWithTitle:@"Use" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+            NSString *link = [a.textFields.firstObject.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (link.length) { [[NSUserDefaults standardUserDefaults] setObject:link forKey:kLinkKey]; [LCFeed.shared ensureRunning]; }
+            asking = NO;
+        }]];
+        [a addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(UIAlertAction *x) { asking = NO; }]];
+        [top presentViewController:a animated:YES completion:nil];
+    });
+}
+
+static void LCSwizzle(Class cls, SEL a, SEL b) {
+    Method ma = class_getInstanceMethod(cls, a), mb = class_getInstanceMethod(cls, b);
+    if (ma && mb) method_exchangeImplementations(ma, mb);
+}
+
+#pragma mark - preview overlay (AVCaptureVideoPreviewLayer)
+
+static const void *kOverlayKey = &kOverlayKey;
+static NSHashTable *gPreviews;      // weak set of live preview layers
+static CADisplayLink *gLink;
+
+@interface LCDriver : NSObject
++ (void)tick;
+@end
+@implementation LCDriver
++ (void)tick {
+    LCEnsureLink();
+    CVPixelBufferRef px = [LCFeed.shared copyLatest];
+    if (!px) return;
+    CMSampleBufferRef sb = LCWrap(px, NULL);
+    CVPixelBufferRelease(px);
+    if (!sb) return;
+    CFArrayRef att = CMSampleBufferGetSampleAttachmentsArray(sb, true);
+    if (att && CFArrayGetCount(att)) {
+        CFMutableDictionaryRef d = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(att, 0);
+        CFDictionarySetValue(d, kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
+    }
+    @synchronized (gPreviews) {
+        for (AVCaptureVideoPreviewLayer *pl in gPreviews.allObjects) {
+            AVSampleBufferDisplayLayer *disp = objc_getAssociatedObject(pl, kOverlayKey);
+            if (!disp) {
+                disp = [AVSampleBufferDisplayLayer layer];
+                disp.videoGravity = AVLayerVideoGravityResizeAspectFill;
+                [pl addSublayer:disp];
+                objc_setAssociatedObject(pl, kOverlayKey, disp, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            disp.frame = pl.bounds;
+            if (disp.status == AVQueuedSampleBufferRenderingStatusFailed) [disp flush];
+            [disp enqueueSampleBuffer:sb];
+        }
+    }
+    CFRelease(sb);
+}
+@end
+
+static void LCRegisterPreview(AVCaptureVideoPreviewLayer *pl) {
+    if (!pl) return;
+    @synchronized (gPreviews) { [gPreviews addObject:pl]; }
+    LCEnsureLink();
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!gLink) {
+            gLink = [CADisplayLink displayLinkWithTarget:LCDriver.class selector:@selector(tick)];
+            gLink.preferredFramesPerSecond = 30;
+            [gLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+        }
+    });
+}
+
+@interface AVCaptureVideoPreviewLayer (LiveChar)
+@end
+@implementation AVCaptureVideoPreviewLayer (LiveChar)
+- (void)lc_setSession:(AVCaptureSession *)session { [self lc_setSession:session]; LCRegisterPreview(self); }
+- (instancetype)lc_initWithSession:(AVCaptureSession *)session { id s = [self lc_initWithSession:session]; LCRegisterPreview(s); return s; }
+@end
+
+#pragma mark - frame delegate (AVCaptureVideoDataOutput)
+
+static SEL kCbSel;   // captureOutput:didOutputSampleBuffer:fromConnection:
+
+static void lc_didOutput(id self, SEL _cmd, AVCaptureOutput *output, CMSampleBufferRef sb, AVCaptureConnection *conn) {
+    LCEnsureLink();
+    CVPixelBufferRef px = [LCFeed.shared copyLatest];
+    void (*orig)(id, SEL, id, CMSampleBufferRef, id) = (void *)objc_getAssociatedObject(self.class, kCbSel);
+    if (px) {
+        CMSampleBufferRef nb = LCWrap(px, sb);
+        CVPixelBufferRelease(px);
+        if (nb) { if (orig) orig(self, _cmd, output, nb, conn); CFRelease(nb); return; }
+    }
+    if (orig) orig(self, _cmd, output, sb, conn);
+}
+
+@interface AVCaptureVideoDataOutput (LiveChar)
+@end
+@implementation AVCaptureVideoDataOutput (LiveChar)
+- (void)lc_setSampleBufferDelegate:(id<AVCaptureVideoDataOutputSampleBufferDelegate>)delegate queue:(dispatch_queue_t)queue {
+    if (delegate) {
+        Class cls = [delegate class];
+        @synchronized (cls) {
+            if (!objc_getAssociatedObject(cls, kCbSel)) {
+                Method m = class_getInstanceMethod(cls, kCbSel);
+                if (m) {
+                    IMP old = method_getImplementation(m);
+                    objc_setAssociatedObject(cls, kCbSel, (__bridge id)(void *)old, OBJC_ASSOCIATION_ASSIGN);
+                    class_replaceMethod(cls, kCbSel, (IMP)lc_didOutput, method_getTypeEncoding(m));
+                } else {
+                    objc_setAssociatedObject(cls, kCbSel, (__bridge id)(void *)NULL, OBJC_ASSOCIATION_ASSIGN);
+                    class_addMethod(cls, kCbSel, (IMP)lc_didOutput, "v@:@@@");
+                }
+            }
+        }
+    }
+    [self lc_setSampleBufferDelegate:delegate queue:queue];
+    LCEnsureLink();
+}
+@end
+
+#pragma mark - load
+
+__attribute__((constructor))
+static void LiveCharHookInit(void) {
+    @autoreleasepool {
+        gPreviews = [NSHashTable weakObjectsHashTable];
+        kCbSel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
+        LCSwizzle(AVCaptureVideoPreviewLayer.class, @selector(setSession:), @selector(lc_setSession:));
+        LCSwizzle(AVCaptureVideoPreviewLayer.class, @selector(initWithSession:), @selector(lc_initWithSession:));
+        LCSwizzle(AVCaptureVideoDataOutput.class, @selector(setSampleBufferDelegate:queue:), @selector(lc_setSampleBufferDelegate:queue:));
+        NSLog(@"[LiveCharHook] loaded");
+    }
+}
