@@ -132,7 +132,7 @@ struct User: Codable, Equatable {
 }
 
 struct AppConfig: Codable {
-    struct Engines: Codable { let lucy: Bool; let eden: Bool }
+    struct Engines: Codable { let lucy: Bool; let eden: Bool; let voice: Bool? }
     let user: User?
     let hasUsers: Bool
     let allowSignup: Bool
@@ -211,3 +211,16 @@ func formatSeconds(_ v: Double) -> String {
     if h > 0 || m > 0 { out += "\(m)m " }
     return out + "\(s % 60)s"
 }
+
+struct VoiceInfo: Codable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let category: String
+    let gender: String
+    let accent: String
+    let age: String
+    let description: String
+    let preview: String
+    var detail: String { [gender, age, accent, description].filter { !$0.isEmpty }.joined(separator: " · ") }
+}
+struct VoicesResponse: Codable { let voices: [VoiceInfo] }

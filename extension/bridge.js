@@ -44,11 +44,11 @@
   };
 
   const { port1: port, port2 } = new MessageChannel();
-  let cfg = { enabled: true, link: "", replaceAll: true };
+  let cfg = { enabled: true, link: "", replaceAll: true, voice: false };
   let ac = null, wanted = false;
 
   const link = () => LiveCharPlayer.parseLink(cfg.link);
-  const sendConfig = () => port.postMessage({ type: "config", enabled: !!(cfg.enabled && link()), replaceAll: !!cfg.replaceAll });
+  const sendConfig = () => port.postMessage({ type: "config", enabled: !!(cfg.enabled && link()), replaceAll: !!cfg.replaceAll, voice: !!cfg.voice });
 
   function open() {
     wanted = true;
@@ -65,7 +65,7 @@
     else if (e.data?.type === "close") close();
   };
 
-  chrome.storage.local.get({ enabled: true, link: "", replaceAll: true }, (v) => { cfg = v; sendConfig(); });
+  chrome.storage.local.get({ enabled: true, link: "", replaceAll: true, voice: false }, (v) => { cfg = v; sendConfig(); });
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     for (const [k, { newValue }] of Object.entries(changes)) cfg[k] = newValue;

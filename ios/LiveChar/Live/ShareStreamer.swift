@@ -40,6 +40,22 @@ final class ShareStreamer {
         }
     }
 
+    /// New-voice audio for the live link: [flags 4][timestamp µs][16 kHz s16le mono PCM].
+    /// The timestamp is on the same clock as the video, so viewers can line them up.
+    func sendAudio(_ pcm: Data, at time: CFTimeInterval) {
+        queue.async {
+            guard !self.stopped, !pcm.isEmpty else { return }
+            let ts = UInt64(max(0, time) * 1_000_000)
+            let length = UInt32(9 + pcm.count)
+            var header = Data(count: 13)
+            header[0] = UInt8(length >> 24); header[1] = UInt8(length >> 16 & 0xff); header[2] = UInt8(length >> 8 & 0xff); header[3] = UInt8(length & 0xff)
+            header[4] = 4
+            for i in 0..<8 { header[5 + i] = UInt8(ts >> (56 - 8 * UInt64(i)) & 0xff) }
+            self.pending.append(header); self.pending.append(pcm)
+            self.flush()
+        }
+    }
+
     private func makeSession(_ s: CGSize) {
         if let session { VTCompressionSessionInvalidate(session) }
         session = nil; size = s

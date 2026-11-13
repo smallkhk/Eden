@@ -10,6 +10,8 @@
   const DEVICE_ID = "livechar-iphone-camera";
   const GROUP_ID = "livechar";
   const LABEL = "LiveChar (iPhone)";
+  const MIC_ID = "livechar-iphone-voice";
+  const MIC_LABEL = "LiveChar voice (iPhone)";
   const proto = MediaDevices.prototype;
   const realGetUserMedia = proto.getUserMedia;
   const realEnumerate = proto.enumerateDevices;
@@ -35,18 +37,19 @@
 
   // ---- one decoder + canvas shared by every track handed out ----
   let shared = null;
-  function acquireTrack() {
+  function acquireTrack(kind = "video") {
     if (!shared) {
       const canvas = document.createElement("canvas");
       canvas.width = 1280; canvas.height = 720;
-      const player = LiveCharPlayer.create(canvas, { waitingText: "Waiting for LiveChar on your iPhone…" });
+      const player = LiveCharPlayer.create(canvas, { waitingText: "Waiting for LiveChar on your iPhone…", audio: "stream" });
       const stream = canvas.captureStream(30);
       shared = { canvas, player, stream, users: 0 };
       port?.postMessage({ type: "open" });
     }
     shared.users++;
-    const track = shared.stream.getVideoTracks()[0].clone();
-    dress(track);
+    const src = kind === "audio" ? shared.player.audioStream().getAudioTracks()[0] : shared.stream.getVideoTracks()[0];
+    const track = src.clone();
+    dress(track, kind);
     return track;
   }
   function release() {
@@ -56,30 +59,32 @@
     shared.stream.getTracks().forEach((t) => t.stop());
     shared = null;
   }
-  function dress(track) {
+  function dress(track, kind = "video") {
     let released = false;
     const done = () => { if (!released) { released = true; release(); } };
     const stop = track.stop.bind(track);
     Object.defineProperty(track, "stop", { configurable: true, value: () => { stop(); done(); } });
     track.addEventListener("ended", done);
-    Object.defineProperty(track, "label", { configurable: true, get: () => LABEL });
+    Object.defineProperty(track, "label", { configurable: true, get: () => (kind === "audio" ? MIC_LABEL : LABEL) });
     const settings = track.getSettings.bind(track);
-    Object.defineProperty(track, "getSettings", { configurable: true, value: () => ({ ...settings(), deviceId: DEVICE_ID, groupId: GROUP_ID }) });
+    Object.defineProperty(track, "getSettings", { configurable: true, value: () => ({ ...settings(), deviceId: kind === "audio" ? MIC_ID : DEVICE_ID, groupId: GROUP_ID }) });
     const clone = track.clone.bind(track);
-    Object.defineProperty(track, "clone", { configurable: true, value: () => { shared && shared.users++; const c = clone(); dress(c); return c; } });
+    Object.defineProperty(track, "clone", { configurable: true, value: () => { shared && shared.users++; const c = clone(); dress(c, kind); return c; } });
   }
 
   // which camera the page asked for: true = ours, false = another one, null = any
-  function asksForUs(video) {
-    if (!video || video === true) return null;
-    const d = video.deviceId;
+  function asksForUs(c, id = DEVICE_ID) {
+    if (!c || c === true) return null;
+    const d = c.deviceId;
     if (d == null) return null;
     const ids = typeof d === "string" ? [d] : Array.isArray(d) ? d : [d.exact, d.ideal].flat().filter(Boolean);
-    return ids.length ? ids.includes(DEVICE_ID) : null;
+    return ids.length ? ids.includes(id) : null;
   }
 
-  function fakeDevice() {
-    const info = { deviceId: DEVICE_ID, kind: "videoinput", label: LABEL, groupId: GROUP_ID };
+  function fakeDevice(kind = "videoinput") {
+    const info = kind === "audioinput"
+      ? { deviceId: MIC_ID, kind, label: MIC_LABEL, groupId: GROUP_ID }
+      : { deviceId: DEVICE_ID, kind, label: LABEL, groupId: GROUP_ID };
     const props = {};
     for (const [k, v] of Object.entries(info)) props[k] = { value: v, enumerable: true };
     props.toJSON = { value: () => ({ ...info }) };
@@ -88,15 +93,20 @@
 
   proto.getUserMedia = async function (constraints) {
     const c = await getConfig();
-    if (!c.enabled || !constraints || !constraints.video) return realGetUserMedia.call(this, constraints);
-    const want = asksForUs(constraints.video);
-    if (want === false || (want === null && !c.replaceAll)) return realGetUserMedia.call(this, constraints);
+    if (!c.enabled || !constraints) return realGetUserMedia.call(this, constraints);
+    const vWant = constraints.video ? asksForUs(constraints.video) : false;
+    const useCam = !!constraints.video && (vWant === true || (vWant === null && c.replaceAll));
+    // the new voice as the microphone: only when turned on in the extension
+    const aWant = constraints.audio ? asksForUs(constraints.audio, MIC_ID) : false;
+    const useMic = !!constraints.audio && c.voice && (aWant === true || (aWant === null && c.replaceAll));
+    if (!useCam && !useMic) return realGetUserMedia.call(this, constraints);
     const out = new MediaStream();
-    if (constraints.audio) {
-      const a = await realGetUserMedia.call(this, { audio: constraints.audio });   // the microphone stays real
-      a.getAudioTracks().forEach((t) => out.addTrack(t));
-    }
-    out.addTrack(acquireTrack());
+    const rest = {};
+    if (constraints.video && !useCam) rest.video = constraints.video;
+    if (constraints.audio && !useMic) rest.audio = constraints.audio;    // the real microphone/camera for the rest
+    if (rest.video || rest.audio) (await realGetUserMedia.call(this, rest)).getTracks().forEach((t) => out.addTrack(t));
+    if (useMic) out.addTrack(acquireTrack("audio"));
+    if (useCam) out.addTrack(acquireTrack("video"));
     return out;
   };
 
@@ -104,9 +114,11 @@
     const list = await realEnumerate.call(this);
     const c = await getConfig();
     if (!c.enabled) return list;
-    // "use for every camera request": hide the real cameras so no picker offers one that won't be used
-    const rest = c.replaceAll ? list.filter((d) => d.kind !== "videoinput") : list;
-    return [fakeDevice(), ...rest];
+    // "for every request": hide the real ones so no picker offers a device that won't be used
+    const hide = (d) => c.replaceAll && (d.kind === "videoinput" || (c.voice && d.kind === "audioinput"));
+    const ours = [fakeDevice("videoinput")];
+    if (c.voice) ours.push(fakeDevice("audioinput"));
+    return [...ours, ...list.filter((d) => !hide(d))];
   };
 
   // old callback API

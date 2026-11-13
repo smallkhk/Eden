@@ -35,11 +35,13 @@
     <div class="grid">
       <div><label for="fal_key">fal.ai key (Eden Live)</label><input id="fal_key" type="password" autocomplete="off" placeholder=""><div class="hint" id="falHint"></div></div>
       <div><label for="decart_key">Decart key (Lucy)</label><input id="decart_key" type="password" autocomplete="off" placeholder=""><div class="hint" id="decartHint"></div></div>
+      <div><label for="elevenlabs_key">ElevenLabs key (voice changer)</label><input id="elevenlabs_key" type="password" autocomplete="off" placeholder=""><div class="hint" id="xiHint"></div></div>
     </div>
     <div class="hint">Leave a key box empty to keep the current key.</div>
 
     <h2 style="margin-top:20px">Billing</h2>
     <div class="grid">
+      <div><label for="rate_voice">Voice changer rate (per second of speech)</label><input id="rate_voice" type="number" min="0" step="0.1"></div>
       <div><label for="rate_lucy">Lucy rate</label><input id="rate_lucy" type="number" min="0" step="0.1"></div>
       <div><label for="rate_eden_5b">Eden 5B rate</label><input id="rate_eden_5b" type="number" min="0" step="0.1"></div>
       <div><label for="rate_eden_14b">Eden 14B rate</label><input id="rate_eden_14b" type="number" min="0" step="0.1"></div>
@@ -163,7 +165,7 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&
 const fmt = (s) => { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return (h ? h + "h " : "") + (h || m ? m + "m " : "") + (s % 60) + "s"; };
 const when = (t) => new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 const TEXTS = ["usdt_bsc_address", "usdt_tron_address", "smtp_host", "smtp_port", "smtp_user", "smtp_from", "site_url"];
-const NUMS = ["rate_lucy", "rate_eden_5b", "rate_eden_14b", "first_frame_fee", "max_session_seconds", "signup_bonus"];
+const NUMS = ["rate_voice", "rate_lucy", "rate_eden_5b", "rate_eden_14b", "first_frame_fee", "max_session_seconds", "signup_bonus"];
 
 async function api(path, body) {
   const r = await fetch(path, { method: body ? "POST" : "GET", headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
@@ -185,12 +187,14 @@ async function loadSettings() {
   $("decartHint").textContent = s.decart_key_hint ? "Current: " + s.decart_key_hint : "No key saved yet";
   $("fal_key").placeholder = s.fal_key_hint ? "Paste a new key to replace it" : "Paste your fal.ai key";
   $("decart_key").placeholder = s.decart_key_hint ? "Paste a new key to replace it" : "Paste your Decart key";
+  $("xiHint").textContent = s.elevenlabs_key_hint ? "Current: " + s.elevenlabs_key_hint : "No key saved yet";
+  $("elevenlabs_key").placeholder = s.elevenlabs_key_hint ? "Paste a new key to replace it" : "Paste your ElevenLabs key";
 }
 $("save").onclick = async () => {
-  const body = { allow_signup: $("allow_signup").checked, lucy_fast: $("lucy_fast").checked, fal_key: $("fal_key").value, decart_key: $("decart_key").value, tron_api_key: $("tron_api_key").value, smtp_pass: $("smtp_pass").value };
+  const body = { allow_signup: $("allow_signup").checked, lucy_fast: $("lucy_fast").checked, fal_key: $("fal_key").value, decart_key: $("decart_key").value, elevenlabs_key: $("elevenlabs_key").value, tron_api_key: $("tron_api_key").value, smtp_pass: $("smtp_pass").value };
   for (const k of NUMS) body[k] = $(k).value;
   for (const k of TEXTS) body[k] = $(k).value;
-  try { await api("/api/admin/settings", body); for (const k of ["fal_key", "decart_key", "tron_api_key", "smtp_pass"]) $(k).value = ""; await loadSettings(); say("Settings saved"); }
+  try { await api("/api/admin/settings", body); for (const k of ["fal_key", "decart_key", "elevenlabs_key", "tron_api_key", "smtp_pass"]) $(k).value = ""; await loadSettings(); say("Settings saved"); }
   catch (e) { say(e.message, true); }
 };
 

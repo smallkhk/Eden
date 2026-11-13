@@ -71,7 +71,7 @@ const r2 = (n) => Math.round(n * 100) / 100;
 
 // ---------- settings (admin-editable; .env is only a fallback for the keys) ----------
 const DEFAULTS = {
-  fal_key: "", decart_key: "",
+  fal_key: "", decart_key: "", elevenlabs_key: "", rate_voice: "1",
   rate_lucy: "1", rate_eden_5b: "1", rate_eden_14b: "1", lucy_fast: "1",
   first_frame_fee: "0", max_session_seconds: "300", signup_bonus: "0", allow_signup: "1",
   lucy_model: "lucy-latest", first_frame_model: "fal-ai/flux-2/klein/9b/edit",
@@ -84,6 +84,7 @@ function setting(key) {
   if (row && row.value !== "") return row.value;
   if (key === "fal_key") return realKey(process.env.FAL_KEY);
   if (key === "decart_key") return realKey(process.env.DECART_API_KEY);
+  if (key === "elevenlabs_key") return realKey(process.env.ELEVENLABS_API_KEY);
   return DEFAULTS[key] ?? "";
 }
 const num = (key) => { const n = Number(setting(key)); return Number.isFinite(n) ? n : Number(DEFAULTS[key]); };
@@ -196,9 +197,9 @@ app.get("/api/config", (req, res) => {
     allowSignup: setting("allow_signup") === "1",
     maxSessionSeconds: num("max_session_seconds"),
     lucyModel: setting("lucy_model"), lucyFast: setting("lucy_fast") === "1",
-    engines: { lucy: !!setting("decart_key"), eden: !!setting("fal_key") },
+    engines: { lucy: !!setting("decart_key"), eden: !!setting("fal_key"), voice: !!setting("elevenlabs_key") },
     canReset: !!setting("smtp_host"),
-    rates: { lucy: num("rate_lucy"), "eden-5b": num("rate_eden_5b"), "eden-14b": num("rate_eden_14b"), firstFrame: num("first_frame_fee") },
+    rates: { lucy: num("rate_lucy"), "eden-5b": num("rate_eden_5b"), "eden-14b": num("rate_eden_14b"), firstFrame: num("first_frame_fee"), voice: num("rate_voice") },
   });
 });
 
@@ -587,13 +588,13 @@ app.delete("/api/characters/:id", requireUser, (req, res) => {
 });
 
 // ---------- admin ----------
-const NUMERIC = ["rate_lucy", "rate_eden_5b", "rate_eden_14b", "first_frame_fee", "max_session_seconds", "signup_bonus"];
+const NUMERIC = ["rate_voice", "rate_lucy", "rate_eden_5b", "rate_eden_14b", "first_frame_fee", "max_session_seconds", "signup_bonus"];
 const mask = (v) => (v ? `••••${v.slice(-4)}` : "");
 const TEXT_KEYS = ["usdt_bsc_address", "usdt_tron_address", "smtp_host", "smtp_port", "smtp_user", "smtp_from", "site_url"];
-const SECRET_KEYS = ["fal_key", "decart_key", "tron_api_key", "smtp_pass"];
+const SECRET_KEYS = ["fal_key", "decart_key", "elevenlabs_key", "tron_api_key", "smtp_pass"];
 
 app.get("/api/admin/settings", requireAdmin, (_req, res) => {
-  const out = { fal_key_hint: mask(setting("fal_key")), decart_key_hint: mask(setting("decart_key")), allow_signup: setting("allow_signup") === "1", lucy_fast: setting("lucy_fast") === "1", lucy_model: setting("lucy_model") };
+  const out = { fal_key_hint: mask(setting("fal_key")), decart_key_hint: mask(setting("decart_key")), elevenlabs_key_hint: mask(setting("elevenlabs_key")), allow_signup: setting("allow_signup") === "1", lucy_fast: setting("lucy_fast") === "1", lucy_model: setting("lucy_model") };
   for (const k of NUMERIC) out[k] = num(k);
   for (const k of TEXT_KEYS) out[k] = setting(k);
   out.tron_api_key_hint = mask(setting("tron_api_key")); out.smtp_pass_hint = mask(setting("smtp_pass"));
@@ -723,11 +724,88 @@ app.get("/api/admin/activity", requireAdmin, (_req, res) => {
   });
 });
 
+// ---------- voice: ElevenLabs voice changer (natural, speech-to-speech) ----------
+// The app splits the mic at short pauses and posts each phrase (16 kHz 16-bit mono PCM, up to 8 s).
+// The server converts it with the user's chosen voice and streams the new voice back (same format).
+// Billed per second of speech at rate_voice, gathered into one history line per burst of talking.
+const XI = "https://api.elevenlabs.io/v1";
+let voiceCache = { at: 0, list: [] };
+const voiceUse = new Map();   // userId -> { secs, last }
+app.get("/api/voices", requireUser, async (_req, res) => {
+  const key = setting("elevenlabs_key");
+  if (!key) return res.status(503).json({ error: "Voice is not set up yet" });
+  if (Date.now() - voiceCache.at > 10 * 60 * 1000 || !voiceCache.list.length) {
+    try {
+      const r = await fetch(`${XI}/voices`, { headers: { "xi-api-key": key } });
+      const j = await r.json();
+      if (!r.ok) return res.status(502).json({ error: `ElevenLabs: ${j?.detail?.message || j?.detail || r.status}` });
+      voiceCache = { at: Date.now(), list: (j.voices || []).map((v) => ({
+        id: v.voice_id, name: v.name, category: v.category || "",
+        gender: v.labels?.gender || "", accent: v.labels?.accent || "", age: v.labels?.age || "",
+        description: v.labels?.description || v.labels?.descriptive || v.description || "", preview: v.preview_url || "",
+      })) };
+    } catch (e) { return res.status(502).json({ error: "Can't reach ElevenLabs" }); }
+  }
+  res.json({ voices: voiceCache.list });
+});
+app.post("/api/voice/convert", requireUser, express.raw({ type: "application/octet-stream", limit: "400kb" }), async (req, res) => {
+  const key = setting("elevenlabs_key");
+  if (!key) return res.status(503).json({ error: "Voice is not set up yet" });
+  const voice = String(req.query.voice || "");
+  if (!/^[A-Za-z0-9]{8,40}$/.test(voice)) return res.status(400).json({ error: "Pick a voice" });
+  const pcm = req.body;
+  if (!Buffer.isBuffer(pcm) || pcm.length < 3200 || pcm.length > 16000 * 2 * 8 || pcm.length % 2) {
+    return res.status(400).json({ error: "A phrase must be 0.1–8 seconds of 16 kHz audio" });
+  }
+  const secs = pcm.length / 2 / 16000, cost = secs * num("rate_voice");
+  if (balanceOf(req.user.id) < Math.min(cost, 1)) return res.status(402).json({ error: "Balance finished — top up to continue" });
+  const form = new FormData();
+  form.set("model_id", "eleven_multilingual_sts_v2");
+  form.set("file_format", "pcm_s16le_16");
+  form.set("remove_background_noise", "false");
+  form.append("audio", new Blob([pcm], { type: "application/octet-stream" }), "phrase.pcm");
+  let r;
+  try {
+    // ElevenLabs serves the same voice changer under both names; try the documented one first
+    for (const path of ["speech-to-speech", "voice-changer"]) {
+      r = await fetch(`${XI}/${path}/${voice}/stream?output_format=pcm_16000&optimize_streaming_latency=3`, {
+        method: "POST", headers: { "xi-api-key": key }, body: form,
+      });
+      if (r.status !== 404) break;
+    }
+  } catch { return res.status(502).json({ error: "Can't reach ElevenLabs" }); }
+  if (!r.ok || !r.body) {
+    const t = await r.text().catch(() => "");
+    let msg = t.slice(0, 200);
+    try { const j = JSON.parse(t); msg = j?.detail?.message || j?.detail || msg; } catch {}
+    return res.status(r.status === 401 ? 503 : 502).json({ error: `ElevenLabs: ${msg}` });
+  }
+  debit(req.user.id, cost, null);
+  const u = voiceUse.get(req.user.id) || { secs: 0, last: 0 };
+  u.secs += cost; u.last = now(); voiceUse.set(req.user.id, u);
+  res.setHeader("Content-Type", "application/octet-stream");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.setHeader("X-Balance", String(balanceOf(req.user.id)));
+  const reader = r.body.getReader();
+  try {
+    for (;;) { const { value, done } = await reader.read(); if (done) break; res.write(Buffer.from(value)); }
+  } catch {}
+  res.end();
+});
+setInterval(() => {   // one history line per burst of talking
+  for (const [id, u] of voiceUse) if (now() - u.last > 30000) {
+    if (u.secs > 0) q("INSERT INTO ledger (user_id, delta, reason, created_at) VALUES (?, ?, ?, ?)").run(id, -r2(u.secs), "Voice changer", now());
+    voiceUse.delete(id);
+  }
+}, 10000).unref();
+
 // ---------- share live: the iOS app streams its output to a watch link ----------
 // Each user has one fixed link (/watch/<id>). The app POSTs H.264 packets; viewers (watch page, Chrome
 // extension) keep one streaming GET open and get them as they arrive. Plain HTTP both ways, so it works
 // behind any Nginx without extra config (responses carry X-Accel-Buffering: no).
-// Packet: [u32 length][u8 flags][u64 timestamp µs][H.264 Annex B]. flags 1 = keyframe, 2 = stream ended.
+// Packet: [u32 length][u8 flags][u64 timestamp µs][data]. flags 1 = keyframe, 2 = stream ended,
+// 4 = audio (16 kHz s16le mono PCM of the new voice, same clock as the video); otherwise data is H.264 Annex B.
 // A zero-length packet is a keep-alive.
 db.exec("CREATE TABLE IF NOT EXISTS shares (user_id INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE)");
 const SHARE_IDLE_MS = 20000, VIEWER_MAX_BACKLOG = 8 << 20, GOP_MAX_BYTES = 6 << 20;
@@ -776,8 +854,10 @@ app.post("/api/share/frames", requireUser, express.raw({ type: "application/octe
     if (payload[0] & 2) { stopChannel(c); continue; }
     // keep everything since the last keyframe, so a viewer who joins now starts with a clean picture
     const copy = Buffer.from(payload);
-    if (copy[0] & 1) { c.gop = []; c.gopBytes = 0; }
-    if (c.gopBytes + copy.length <= GOP_MAX_BYTES) { c.gop.push(copy); c.gopBytes += copy.length; }
+    if (!(copy[0] & 4)) {   // video: keep since the last keyframe (audio, flag 4, is only passed on live)
+      if (copy[0] & 1) { c.gop = []; c.gopBytes = 0; }
+      if (c.gopBytes + copy.length <= GOP_MAX_BYTES) { c.gop.push(copy); c.gopBytes += copy.length; }
+    }
     out.push(...frameOf(copy));
   }
   if (out.length) for (const v of c.viewers) sendTo(v, out);

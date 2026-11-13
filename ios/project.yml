@@ -58,7 +58,7 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         NSCameraUsageDescription: LiveChar uses the camera to turn you into your character live.
-        NSMicrophoneUsageDescription: LiveChar does not record sound; this is only asked if a video library requests it.
+        NSMicrophoneUsageDescription: LiveChar uses the microphone to change your voice live.
         NSPhotoLibraryAddUsageDescription: LiveChar saves your photos and recordings to Photos.
         NSPhotoLibraryUsageDescription: LiveChar lets you pick a character image from your photos.
         UIFileSharingEnabled: false

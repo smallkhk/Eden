@@ -185,6 +185,8 @@ struct StudioView: View {
                     .font(.subheadline).tint(Theme.char)
             }
 
+            VoiceCard()
+
             Card {
                 Text("CAMERA & OUTPUT").font(.caption.weight(.bold)).foregroundStyle(Theme.dim)
                 HStack(spacing: 8) {

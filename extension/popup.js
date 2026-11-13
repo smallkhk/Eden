@@ -9,7 +9,7 @@ function preview(linkText) {
   $("err").hidden = !linkText || !!l;
   $("err").textContent = "That doesn't look like a LiveChar live link (…/watch/…)";
   if (!l) { setState(false, linkText ? "Bad link" : "No link yet"); return; }
-  player = LiveCharPlayer.create($("v"), { waitingText: "Waiting for your iPhone…",
+  player = LiveCharPlayer.create($("v"), { audio: "none", waitingText: "Waiting for your iPhone…",
     onState: (s) => setState(s === "live", s === "live" ? "LIVE" : "Waiting for the iPhone to go live") });
   ac = new AbortController();
   LiveCharPlayer.follow(l.stream, player.push, { signal: ac.signal, onStatus: (s) => {
@@ -18,8 +18,8 @@ function preview(linkText) {
   } });
 }
 
-chrome.storage.local.get({ enabled: true, link: "", replaceAll: true }, (v) => {
-  $("link").value = v.link; $("enabled").checked = v.enabled; $("replaceAll").checked = v.replaceAll;
+chrome.storage.local.get({ enabled: true, link: "", replaceAll: true, voice: false }, (v) => {
+  $("link").value = v.link; $("enabled").checked = v.enabled; $("replaceAll").checked = v.replaceAll; $("voice").checked = v.voice;
   preview(v.link);
 });
 $("link").addEventListener("change", () => {
@@ -28,4 +28,5 @@ $("link").addEventListener("change", () => {
   preview(link);
 });
 $("enabled").addEventListener("change", () => chrome.storage.local.set({ enabled: $("enabled").checked }));
+$("voice").addEventListener("change", () => chrome.storage.local.set({ voice: $("voice").checked }));
 $("replaceAll").addEventListener("change", () => chrome.storage.local.set({ replaceAll: $("replaceAll").checked }));

@@ -1,4 +1,5 @@
 import AVFoundation
+import LiveKit
 import SwiftUI
 import UIKit
 
@@ -56,6 +57,15 @@ final class LiveController: ObservableObject {
     @AppStorage("lc.mirror") var mirror = true { willSet { objectWillChange.send() } }
     @AppStorage("lc.share") var shareOn = false { willSet { objectWillChange.send() } }
     @AppStorage("lc.backCamera") var backCamera = false { willSet { objectWillChange.send() } }
+    // voice changer
+    @AppStorage("lc.voiceOn") var voiceOn = false { willSet { objectWillChange.send() } }
+    @AppStorage("lc.voiceID") var voiceID = "" { willSet { objectWillChange.send() } }
+    @AppStorage("lc.voiceName") var voiceName = "" { willSet { objectWillChange.send() } }
+    @AppStorage("lc.voiceMonitor") var voiceMonitor = false { willSet { objectWillChange.send() } }
+    @AppStorage("lc.avOffset") var avOffset = 0.3 { willSet { objectWillChange.send() } }
+    @Published var voiceState = ""
+    private var voice: VoiceEngine?
+
     @Published var rotation = 0
     @Published var prompt = ""
     @Published var refImage: UIImage?
@@ -100,6 +110,8 @@ final class LiveController: ObservableObject {
     var isPortraitOutput: Bool { engineDef.kind == .lucy && portrait }
 
     init() {
+        // LiveChar sets the audio session itself (mic for the voice changer, PiP)
+        AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = false
         let router = self.router
         camera.onFrame = { pb, _ in router.frame(pb) }
         hub.onFirstFrame = { [weak self] in Task { @MainActor in self?.goLive() } }
@@ -166,7 +178,8 @@ final class LiveController: ObservableObject {
             camera.configure(width: w, height: h, fps: def.fps)
             camera.setRotation(rotation)
             hub.reset()
-            AudioSessionSetup.activate()
+            hub.avOffset = avOffset
+            if voiceOn && !voiceID.isEmpty { await startVoice() } else { AudioSessionSetup.activate() }
             try await camera.start(position: backCamera ? .back : .front)
             pip.setEnabled(true)
             if shareOn { startShare() }
@@ -273,6 +286,7 @@ final class LiveController: ObservableObject {
             }
         }
         if recording { await toggleRecording() }
+        stopVoice()
         stopShare()
         await e?.stop()
         camera.stop()
@@ -326,6 +340,49 @@ final class LiveController: ObservableObject {
             do { try hub.startRecording(); recordStart = Date(); recording = true } catch { note = error.localizedDescription }
         }
     }
+
+    // MARK: voice
+
+    private func startVoice() async {
+        guard voice == nil, !voiceID.isEmpty else { return }
+        guard await VoiceEngine.authorize() else { note = "Allow the microphone for LiveChar in Settings to change your voice"; return }
+        do { try VoiceAudioSession.activate() } catch { note = "Microphone: \(error.localizedDescription)"; return }
+        var ev = VoiceEngine.Events()
+        let hub = self.hub
+        ev.converted = { pcm, at in hub.addVoice(pcm, spokenAt: at) }
+        ev.state = { [weak self] s in Task { @MainActor in self?.voiceState = s } }
+        ev.balance = { [weak self] b in Task { @MainActor in self?.onBalance(b) } }
+        ev.failed = { [weak self] msg in Task { @MainActor in
+            self?.voiceState = msg
+            self?.note = "Voice: \(msg)"
+            if msg.lowercased().contains("balance") || msg.lowercased().contains("not set up") { self?.stopVoice() }
+        } }
+        let v = VoiceEngine(voiceID: voiceID, events: ev)
+        v.monitor = voiceMonitor
+        do { try v.start(); voice = v } catch { note = "Voice: \(error.localizedDescription)"; voiceState = "" }
+    }
+
+    private func stopVoice() {
+        voice?.stop()
+        voice = nil
+        voiceState = ""
+    }
+
+    /// Turn the voice changer on/off, or switch voices, while live.
+    func setVoice(on: Bool) async {
+        voiceOn = on
+        guard running || starting else { return }
+        stopVoice()
+        if on { await startVoice() } else { AudioSessionSetup.activate() }
+    }
+
+    func chooseVoice(id: String, name: String) async {
+        voiceID = id; voiceName = name
+        if voiceOn && (running || starting) { stopVoice(); await startVoice() }
+    }
+
+    func setMonitor(_ on: Bool) { voiceMonitor = on; voice?.monitor = on }
+    func setAVOffset(_ v: Double) { avOffset = v; hub.avOffset = v }
 
     // MARK: share live
 
