@@ -288,7 +288,7 @@ struct ContentView: View {
                     if showInfo && !cam.info.isEmpty {
                         VStack(alignment: .leading, spacing: 3) {
                             ForEach(cam.info, id: \.0) { k, v in
-                                Text("\(k): ").foregroundStyle(.secondary) + Text(v)
+                                Text("\(k): ").foregroundColor(.secondary) + Text(v)
                             }
                         }
                         .font(.caption.monospacedDigit())
