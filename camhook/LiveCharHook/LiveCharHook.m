@@ -346,8 +346,6 @@ static CADisplayLink *gLink;
 }
 @end
 
-@end
-
 static void LCRegisterPreview(AVCaptureVideoPreviewLayer *pl) {
     if (!pl) return;
     @synchronized (gPreviews) { [gPreviews addObject:pl]; }
