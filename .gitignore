@@ -21,3 +21,6 @@ camtest/CamTest/Info.plist
 camtest/build/
 camtest/Payload/
 camtest/CamTest.ipa
+camtest/CamTest.xcodeproj/
+camtest/CamTest/Info.plist
+camtest/build/

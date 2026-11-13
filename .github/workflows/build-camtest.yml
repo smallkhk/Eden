@@ -1,4 +1,4 @@
-name: Build CamTest
+name: Build Cam Test (iOS)
 
 on:
   push:
@@ -11,37 +11,22 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-
       - name: Pick the newest stable Xcode
         run: |
           X=$(ls -d /Applications/Xcode_*.app | grep -viE 'beta|rc' | sort -V | tail -1)
           sudo xcode-select -s "$X"
-          xcodebuild -version
-
-      - name: Generate the Xcode project
+      - name: Build (unsigned)
         working-directory: camtest
         run: |
           brew install xcodegen
           xcodegen generate
-
-      - name: Build (unsigned)
-        working-directory: camtest
-        run: |
-          xcodebuild -project CamTest.xcodeproj -scheme CamTest -configuration Release \
-            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+          xcodebuild -project CamTest.xcodeproj -scheme CamTest -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            CURRENT_PROJECT_VERSION=${{ github.run_number }} build > build.log 2>&1 \
-            || { grep -E "error:" build.log | head -40; tail -20 build.log; exit 1; }
-          tail -3 build.log
-
-      - name: Package .ipa
-        working-directory: camtest
-        run: |
-          rm -rf Payload && mkdir Payload
-          cp -R build/Build/Products/Release-iphoneos/CamTest.app Payload/
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} build > build.log 2>&1 || { grep -E "error:" build.log | head -40; tail -20 build.log; exit 1; }
+          tail -2 build.log
+          rm -rf Payload && mkdir Payload && cp -R build/Build/Products/Release-iphoneos/CamTest.app Payload/
           zip -qry CamTest.ipa Payload
-          ls -lh CamTest.ipa
-
       - uses: actions/upload-artifact@v4
         with:
           name: CamTest-iOS
