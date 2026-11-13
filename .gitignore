@@ -16,3 +16,8 @@ ios/build/
 ios/spm/
 ios/build.log
 ios/SafariExtension/Info.plist
+camtest/CamTest.xcodeproj/
+camtest/CamTest/Info.plist
+camtest/build/
+camtest/Payload/
+camtest/CamTest.ipa

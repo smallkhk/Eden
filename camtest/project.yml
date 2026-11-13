@@ -1,0 +1,36 @@
+name: CamTest
+options:
+  bundleIdPrefix: app.livechar
+  deploymentTarget:
+    iOS: "15.0"
+settings:
+  base:
+    MARKETING_VERSION: 1.0.0
+    CURRENT_PROJECT_VERSION: 1
+    SWIFT_VERSION: 5.0
+targets:
+  CamTest:
+    type: application
+    platform: iOS
+    sources: [CamTest]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.livechar.camtest
+        PRODUCT_NAME: CamTest
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: NO
+        # a plain app with no embedded dylibs of its own; lets an injected one load after resigning
+        OTHER_LDFLAGS: "-Xlinker -no_fixup_chains"
+    info:
+      path: CamTest/Info.plist
+      properties:
+        CFBundleDisplayName: CamTest
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSCameraUsageDescription: CamTest shows the camera preview.
