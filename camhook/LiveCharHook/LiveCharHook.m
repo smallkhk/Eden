@@ -274,7 +274,7 @@ static CVPixelBufferRef LCConvert(CVPixelBufferRef src, OSType fmt, size_t w, si
 // How much to pre-rotate so the substitute matches how the app will display the real camera.
 static CGFloat LCRotationFor(AVCaptureConnection *conn, size_t w, size_t h) {
     CGFloat deg = 0;
-    if (@available(iOS 17.0, *)) { if (conn && conn.isVideoRotationAngleSupported) deg = conn.videoRotationAngle; }
+    if (@available(iOS 17.0, *)) { if (conn) deg = conn.videoRotationAngle; }
     else if (conn && conn.isVideoOrientationSupported) {
         switch (conn.videoOrientation) {
             case AVCaptureVideoOrientationPortrait: deg = 90; break;
