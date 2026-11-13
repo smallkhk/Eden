@@ -130,7 +130,8 @@
       if (flags & 2) { needKey = true; lastFrame = 0; queue.length = 0; offset = null; setLive(false); waiting(); return; }
       const ts = Number(new DataView(u.buffer, u.byteOffset + 1, 8).getBigUint64(0));
       const o = nowUs() - ts;
-      if (offset === null || o < offset) offset = o;
+      // clock jump (phone restarted, a new stream): start the timing over
+      if (offset === null || o < offset || o - offset > 8e6) { if (offset !== null && o - offset > 8e6) queue.length = 0; offset = o; }
       const data = u.subarray(9);
       if (flags & 4) { playAudio(ts, data); return; }
       const pkt = { key: (flags & 1) === 1, ts, data };
