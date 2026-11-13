@@ -18,6 +18,7 @@
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
 #import <VideoToolbox/VideoToolbox.h>
+#import <CoreImage/CoreImage.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
@@ -224,6 +225,45 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
     if (status == noErr && image) [(__bridge LCFeed *)outRef storeFrame:image];
 }
 
+#pragma mark - format conversion (match what the host app asked the camera for)
+
+// WhatsApp/Zoom configure the camera output for a specific pixel format (usually NV12). Our decoder
+// produces BGRA, so each substituted frame is converted to the format/size of the real frame it replaces,
+// scaled aspect-fill. Without this the app's encoder gets a mismatched buffer and sends black/green.
+static CIContext *gCI;
+static CVPixelBufferPoolRef gPool;
+static OSType gPF; static size_t gPW, gPH;
+static NSLock *gConvLock;
+
+static CVPixelBufferRef LCConvert(CVPixelBufferRef src, OSType fmt, size_t w, size_t h) CF_RETURNS_RETAINED {
+    if (w == 0 || h == 0) return NULL;
+    if (!gConvLock) gConvLock = [NSLock new];
+    [gConvLock lock];
+    if (!gCI) gCI = [CIContext contextWithOptions:@{ kCIContextUseSoftwareRenderer: @NO }];
+    if (!gPool || gPF != fmt || gPW != w || gPH != h) {
+        if (gPool) { CVPixelBufferPoolRelease(gPool); gPool = NULL; }
+        NSDictionary *attrs = @{ (id)kCVPixelBufferPixelFormatTypeKey: @(fmt),
+                                 (id)kCVPixelBufferWidthKey: @(w), (id)kCVPixelBufferHeightKey: @(h),
+                                 (id)kCVPixelBufferIOSurfacePropertiesKey: @{} };
+        if (CVPixelBufferPoolCreate(NULL, NULL, (__bridge CFDictionaryRef)attrs, &gPool) != kCVReturnSuccess) { [gConvLock unlock]; return NULL; }
+        gPF = fmt; gPW = w; gPH = h;
+    }
+    CVPixelBufferRef dst = NULL;
+    if (CVPixelBufferPoolCreatePixelBuffer(NULL, gPool, &dst) != kCVReturnSuccess || !dst) { [gConvLock unlock]; return NULL; }
+    CIImage *img = [CIImage imageWithCVPixelBuffer:src];
+    size_t sw = CVPixelBufferGetWidth(src), sh = CVPixelBufferGetHeight(src);
+    CGFloat scale = MAX((CGFloat)w / sw, (CGFloat)h / sh);                 // aspect-fill
+    img = [img imageByApplyingTransform:CGAffineTransformMakeScale(scale, scale)];
+    CGRect e = img.extent;
+    img = [img imageByApplyingTransform:CGAffineTransformMakeTranslation(-e.origin.x - (e.size.width - w) / 2,
+                                                                         -e.origin.y - (e.size.height - h) / 2)];
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    [gCI render:img toCVPixelBuffer:dst bounds:CGRectMake(0, 0, w, h) colorSpace:cs];
+    CGColorSpaceRelease(cs);
+    [gConvLock unlock];
+    return dst;
+}
+
 #pragma mark - helpers
 
 // Wrap a pixel buffer as a CMSampleBuffer, reusing timing from `orig` when given.
@@ -375,9 +415,17 @@ static void lc_didOutput(id self, SEL _cmd, AVCaptureOutput *output, CMSampleBuf
     CVPixelBufferRef px = [LCFeed.shared copyLatest];
     void (*orig)(id, SEL, id, CMSampleBufferRef, id) = (__bridge void *)objc_getAssociatedObject([self class], kCbSel);
     if (px) {
-        CMSampleBufferRef nb = LCWrap(px, sb);
+        CVImageBufferRef ob = CMSampleBufferGetImageBuffer(sb);
+        OSType fmt = ob ? CVPixelBufferGetPixelFormatType(ob) : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+        size_t w = ob ? CVPixelBufferGetWidth(ob) : CVPixelBufferGetWidth(px);
+        size_t h = ob ? CVPixelBufferGetHeight(ob) : CVPixelBufferGetHeight(px);
+        CVPixelBufferRef conv = LCConvert(px, fmt, w, h);   // match what the app expects
         CVPixelBufferRelease(px);
-        if (nb) { if (orig) orig(self, _cmd, output, nb, conn); CFRelease(nb); return; }
+        if (conv) {
+            CMSampleBufferRef nb = LCWrap(conv, sb);
+            CVPixelBufferRelease(conv);
+            if (nb) { if (orig) orig(self, _cmd, output, nb, conn); CFRelease(nb); return; }
+        }
     }
     if (orig) orig(self, _cmd, output, sb, conn);
 }
