@@ -1,5 +1,6 @@
 import AVFoundation
 import AVKit
+import CoreImage
 import Photos
 import SwiftUI
 
@@ -41,6 +42,17 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     @Published var denied = false
     private var pinchStart: CGFloat = 1
 
+    // LiveChar feed mode
+    @Published var useFeed = false
+    @Published var feedState = ""
+    @AppStorage("camtest.link") var link = "" { willSet { objectWillChange.send() } }
+    let feed = LiveCharFeed()
+    weak var feedView: FrameLayerView?
+    private let pipFeed = FrameLayerView()
+    private var lastFrame: CVPixelBuffer?
+    private var feedRecorder: FeedRecorder?
+    private let frameLock = NSLock()
+
     override init() {
         super.init()
         NotificationCenter.default.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: .main) { [weak self] n in
@@ -63,6 +75,50 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
         pipLayer.videoGravity = .resizeAspectFill
         pipVC.preferredContentSize = CGSize(width: 1080, height: 1920)
         pipVC.view.layer.addSublayer(pipLayer)
+        pipFeed.frame = pipVC.view.bounds
+        pipFeed.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        pipFeed.display.videoGravity = .resizeAspect
+        pipFeed.isHidden = true
+        pipVC.view.addSubview(pipFeed)
+
+        feed.onState = { [weak self] st in DispatchQueue.main.async { self?.feedState = st } }
+        feed.onFrame = { [weak self] pb, _ in
+            guard let self else { return }
+            self.frameLock.lock(); self.lastFrame = pb; let rec = self.feedRecorder; self.frameLock.unlock()
+            self.feedView?.display.show(pb)
+            self.pipFeed.display.show(pb)
+            rec?.append(pb)
+        }
+        feed.onAudio = { [weak self] pcm, at in
+            // into the recording at the moment it plays, so it stays next to its video
+            let wait = max(0, at.seconds - CACurrentMediaTime())
+            DispatchQueue.global().asyncAfter(deadline: .now() + wait) {
+                guard let self else { return }
+                self.frameLock.lock(); let rec = self.feedRecorder; self.frameLock.unlock()
+                rec?.append(pcm: pcm, at: CMClockGetTime(CMClockGetHostTimeClock()))
+            }
+        }
+    }
+
+    /// Switch between the real camera and the LiveChar live link.
+    func setFeed(_ on: Bool) {
+        if recording { toggleRecord() }
+        if on {
+            guard let url = LiveCharFeed.streamURL(from: link) else { message = "Paste your LiveChar live link first (…/watch/…)"; return }
+            useFeed = true
+            queue.async { if self.session.isRunning { self.session.stopRunning() } }
+            feed.start(url)
+            pipFeed.isHidden = false; pipLayer.isHidden = true
+            message = "Using the LiveChar feed instead of the camera"
+        } else {
+            useFeed = false
+            feed.stop()
+            frameLock.lock(); lastFrame = nil; frameLock.unlock()
+            feedView?.display.flushAndRemoveImage()
+            pipFeed.isHidden = true; pipLayer.isHidden = false
+            queue.async { if !self.session.isRunning { self.session.startRunning() } }
+            message = "Using the camera"
+        }
     }
 
     // MARK: setup
@@ -177,6 +233,14 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     }
 
     func photo() {
+        if useFeed {
+            frameLock.lock(); let pb = lastFrame; frameLock.unlock()
+            guard let pb else { message = "No LiveChar picture yet"; return }
+            let ci = CIImage(cvPixelBuffer: pb)
+            guard let data = CIContext().jpegRepresentation(of: ci, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!) else { return }
+            save { PHAssetCreationRequest.forAsset().addResource(with: .photo, data: data, options: nil) } done: { self.message = "📸 Photo saved to Photos" }
+            return
+        }
         photoOutput.capturePhoto(with: AVCapturePhotoSettings(), delegate: self)
     }
 
@@ -186,6 +250,27 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     }
 
     func toggleRecord() {
+        if useFeed {
+            frameLock.lock()
+            if let rec = feedRecorder {
+                feedRecorder = nil; frameLock.unlock()
+                recording = false
+                Task {
+                    guard let url = await rec.finish() else { await MainActor.run { self.message = "Nothing recorded" }; return }
+                    self.save { PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url) } done: { self.message = "🎬 Video saved to Photos"; try? FileManager.default.removeItem(at: url) }
+                }
+                return
+            }
+            let pb = lastFrame
+            frameLock.unlock()
+            guard let pb else { message = "No LiveChar picture yet"; return }
+            do {
+                let rec = try FeedRecorder(width: CVPixelBufferGetWidth(pb), height: CVPixelBufferGetHeight(pb))
+                frameLock.lock(); feedRecorder = rec; frameLock.unlock()
+                recording = true; recordStart = Date()
+            } catch { message = error.localizedDescription }
+            return
+        }
         if movieOutput.isRecording { movieOutput.stopRecording(); return }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("camtest-\(Int(Date().timeIntervalSince1970)).mov")
         movieOutput.startRecording(to: url, recordingDelegate: self)
@@ -241,6 +326,17 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
 final class PreviewUIView: UIView {
     override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
     var preview: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+    let feedView = FrameLayerView()
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        feedView.frame = bounds
+        feedView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        feedView.display.videoGravity = .resizeAspect
+        feedView.backgroundColor = .black
+        feedView.isHidden = true
+        addSubview(feedView)
+    }
+    required init?(coder: NSCoder) { fatalError() }
 }
 
 struct CameraPreview: UIViewRepresentable {
@@ -251,13 +347,14 @@ struct CameraPreview: UIViewRepresentable {
         v.preview.videoGravity = .resizeAspectFill
         v.backgroundColor = .black
         cam.previewLayer = v.preview
+        cam.feedView = v.feedView
         cam.pipSource = v
         let pinch = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pinch(_:)))
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tap(_:)))
         v.addGestureRecognizer(pinch); v.addGestureRecognizer(tap)
         return v
     }
-    func updateUIView(_ uiView: PreviewUIView, context: Context) {}
+    func updateUIView(_ uiView: PreviewUIView, context: Context) { uiView.feedView.isHidden = !cam.useFeed }
     func makeCoordinator() -> Coordinator { Coordinator(cam) }
 
     final class Coordinator: NSObject {
@@ -298,6 +395,7 @@ struct ContentView: View {
                     Button { showInfo.toggle() } label: { Image(systemName: "info.circle").font(.title2) }.tint(.white)
                 }
                 .padding(.horizontal).padding(.top, 8)
+                SourceBar()
                 if !cam.message.isEmpty {
                     Text(cam.message).font(.subheadline.weight(.semibold))
                         .padding(.horizontal, 14).padding(.vertical, 8)
@@ -314,8 +412,8 @@ struct ContentView: View {
                     }
                 }
                 HStack(spacing: 18) {
-                    round("arrow.triangle.2.circlepath.camera") { cam.flip() }
-                    round(cam.torch ? "flashlight.on.fill" : "flashlight.off.fill", active: cam.torch) { cam.toggleTorch() }
+                    round("arrow.triangle.2.circlepath.camera") { cam.flip() }.disabled(cam.useFeed).opacity(cam.useFeed ? 0.35 : 1)
+                    round(cam.torch ? "flashlight.on.fill" : "flashlight.off.fill", active: cam.torch) { cam.toggleTorch() }.disabled(cam.useFeed).opacity(cam.useFeed ? 0.35 : 1)
                     Button { cam.toggleRecord() } label: {
                         ZStack {
                             Circle().stroke(.white, lineWidth: 4).frame(width: 74, height: 74)
@@ -340,5 +438,46 @@ struct ContentView: View {
                 .foregroundStyle(active ? .yellow : .white)
                 .frame(width: 50, height: 50).background(.ultraThinMaterial, in: Circle())
         }
+    }
+}
+
+
+struct SourceBar: View {
+    @EnvironmentObject var cam: CameraModel
+    @State private var editing = false
+    @State private var draft = ""
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Picker("Source", selection: Binding(get: { cam.useFeed }, set: { on in
+                if on && LiveCharFeed.streamURL(from: cam.link) == nil { draft = cam.link; editing = true } else { cam.setFeed(on) }
+            })) {
+                Text("Camera").tag(false)
+                Text("LiveChar feed").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 300)
+            if cam.useFeed {
+                HStack(spacing: 8) {
+                    Text(cam.feedState).font(.caption.weight(.semibold))
+                    Button("Link") { draft = cam.link; editing = true }.font(.caption)
+                }
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(.ultraThinMaterial, in: Capsule())
+            }
+        }
+        .padding(.top, 6)
+        .alert("LiveChar live link", isPresented: $editing) {
+            TextField("https://…/watch/…", text: $draft).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+            Button("Paste") { if let p = UIPasteboard.general.string { draft = p; save() } }
+            Button("Use") { save() }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("From the LiveChar app: Account → Live link. Turn on “Share live to my link” there.") }
+    }
+
+    private func save() {
+        cam.link = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cam.useFeed { cam.setFeed(false) }
+        cam.setFeed(true)
     }
 }
