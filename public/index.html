@@ -205,6 +205,18 @@
       <div class="row" id="vcamRow" hidden><input id="vcam" type="checkbox"><label for="vcam" class="check">Send to virtual camera</label></div>
       <div class="hint" id="vcamHint" hidden></div>
     </section>
+
+    <section id="voiceSec">
+      <h2>Voice</h2>
+      <div class="row"><input id="voiceOn" type="checkbox"><label for="voiceOn" class="check">Change my voice</label></div>
+      <div class="row" style="margin-top:6px"><select id="voiceSel" aria-label="Voice" style="flex:1"><option value="">Pick a voice</option></select><button id="voicePlay" title="Hear a sample">▶</button></div>
+      <label for="voiceOut" style="margin-top:8px">Send the new voice to</label>
+      <select id="voiceOut"><option value="">Speakers / headphones</option></select>
+      <div class="row"><input id="voiceHear" type="checkbox"><label for="voiceHear" class="check">Play it out (headphones, or a virtual cable for calls)</label></div>
+      <div class="zoomhead" style="margin-top:8px"><label for="avOff" style="margin:0">Lip sync</label><output id="avOffVal">+0.30 s</output></div>
+      <input id="avOff" type="range" min="-0.3" max="1" step="0.05" value="0.3" style="width:100%">
+      <div class="hint" id="voiceHint">Natural voice (ElevenLabs), about 1–2 s behind you. While it's on, recordings, the virtual camera and the voice output run 2.5 s behind so the lips match. Your own screen stays instant.</div>
+    </section>
     </div>
 
     <div class="act">

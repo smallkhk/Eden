@@ -119,6 +119,22 @@ from the run's artifacts: `LiveChar.ipa`, unsigned. Install it with SideStore, A
 Set "release version" to also attach the .ipa to release `v<version>`.
 The server address comes from the `LIVECHAR_URL` repo variable, else the one in `ios/project.yml`.
 
+## Voice changer (natural voice, ElevenLabs)
+
+Talk and come out in another voice, live, together with the video. Admin → API keys → ElevenLabs key; Admin → Billing →
+voice rate (balance seconds per second of speech). Voices are the ones in your ElevenLabs account (add more from their
+Voice Library and they show up here).
+
+- Engine: ElevenLabs speech-to-speech (`eleven_multilingual_sts_v2`), which keeps your tone and emotion. The mic is split at
+  short pauses; each phrase goes to `POST /api/voice/convert?voice=<id>` and the new voice streams back (~1–2 s).
+- **iOS:** Studio → "Change my voice", pick a voice, optional "hear it" (headphones). Recordings get the new voice placed at
+  the moment you spoke (merged when you stop), so the lips match. "Lip sync" slider to fine-tune.
+- **Web / Windows:** Voice section. While it's on, recordings, the virtual camera and the voice output run 2.5 s behind
+  real time so the lips match; your screen stays instant. "Send the new voice to" can be a virtual audio cable
+  (e.g. VB-Audio Cable) so Zoom/Discord/WhatsApp use it as the microphone.
+- **Live link:** carries the new voice too. The watch page plays it ("Sound on"), and the extensions can give it to sites as
+  the microphone ("Use LiveChar voice as my microphone"). Video is held back to match.
+
 ## Live link (share the iOS output)
 
 Each account has a fixed link, `https://your-server/watch/<id>` (Account → Live link in the app; "Make a new link"

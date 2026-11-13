@@ -76,8 +76,10 @@ function createWindow() {
   // Only the configured server gets the camera; nothing else gets any permission.
   const ses = win.webContents.session;
   const okOrigin = (wc) => { try { return !!origin && new URL(wc.getURL()).origin === origin; } catch { return false; } };
-  ses.setPermissionRequestHandler((wc, permission, cb) => cb(permission === "media" && okOrigin(wc)));
-  ses.setPermissionCheckHandler((wc, permission) => permission === "media" && !!wc && okOrigin(wc));
+  // camera + microphone, and picking where the new voice plays (a virtual cable for calls)
+  const allowed = (p) => p === "media" || p === "speaker-selection";
+  ses.setPermissionRequestHandler((wc, permission, cb) => cb(allowed(permission) && okOrigin(wc)));
+  ses.setPermissionCheckHandler((wc, permission) => allowed(permission) && !!wc && okOrigin(wc));
 
   // Stay on the configured server; open anything else in the default browser.
   const external = (target) => { if (/^https?:/i.test(target)) shell.openExternal(target); };

@@ -1,6 +1,7 @@
 import { createDecartClient, models } from "@decartai/sdk";
 import { createFalClient } from "@fal-ai/client";
 import { wma } from "@fal-ai/client/realtime";
+import { WebVoice, VoiceOut, DelayLine } from "./voice.js";
 
 const $ = (id) => document.getElementById(id);
 const ui = {
@@ -16,6 +17,8 @@ const ui = {
   camSel: $("camSel"), rot: $("rot"), orient: $("orient"), orientRow: $("orientRow"),
   outView: $("outView"), zoom: $("zoom"), zoomVal: $("zoomVal"), zoomReset: $("zoomReset"),
   inV: $("inV"), outV: $("outV"), status: $("status"), stats: $("stats"), note: $("note"),
+  voiceSec: $("voiceSec"), voiceOn: $("voiceOn"), voiceSel: $("voiceSel"), voicePlay: $("voicePlay"), voiceOut: $("voiceOut"),
+  voiceHear: $("voiceHear"), avOff: $("avOff"), avOffVal: $("avOffVal"), voiceHint: $("voiceHint"),
 };
 
 // fps / size each engine expects from the browser
@@ -321,6 +324,7 @@ async function startAll() {
     run = eng.kind === "lucy" ? await startLucy() : await startEden(eng);
     refDirty = false;
     ui.stop.disabled = false; ui.apply.disabled = false; ui.engine.disabled = true; ui.orient.disabled = true;
+    startVoice();
     capTimeout = setTimeout(() => stopAll("Session time limit reached"), s.maxSeconds * 1000);
   } catch (e) {
     console.error(e);
@@ -334,6 +338,7 @@ async function stopAll(reason = "") {
   if (b) { clearInterval(b.timer); clearTimeout(b.fallback); api("/api/session/stop", { id: b.id }).then((x) => setBalance(x.balance)).catch(() => {}); }
   try { await r?.stop(); } catch {}
   stopRecording();
+  stopVoice();
   closeCamera();
   ui.outV.srcObject = null;
   ui.start.disabled = false; ui.stop.disabled = true; ui.apply.disabled = true; ui.engine.disabled = false;
@@ -465,7 +470,8 @@ ui.mirror.addEventListener("change", () => setView());
 
 // ---------- virtual camera (desktop app only) ----------
 function startVcam() {
-  const r = isPortrait() ? desk.start("outV", 720, 1280) : desk.start("outV", 1280, 720);
+  const src = delayLine ? "outDelayed" : "outV";      // with the voice changer on, the camera waits for the voice
+  const r = isPortrait() ? desk.start(src, 720, 1280) : desk.start(src, 1280, 720);
   if (r.ok) desk.setView?.(view.z, view.ox, view.oy);
   return r;
 }
@@ -494,8 +500,7 @@ if (desk) {
 
 // ---------- photo + recording of the output (with the current zoom) ----------
 const outSize = () => (isPortrait() ? [720, 1280] : [1280, 720]);
-function drawFramed(ctx, W, H) {
-  const v = ui.outV;
+function drawFramed(ctx, W, H, v = ui.outV) {
   ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
   if (!(v.readyState >= 2 && v.videoWidth)) return false;
   const s = Math.min(W / v.videoWidth, H / v.videoHeight), dw = v.videoWidth * s, dh = v.videoHeight * s;
@@ -529,15 +534,23 @@ function stopRecording() {
 function toggleRecording() {
   if (rec) return stopRecording();
   if (!(ui.outV.readyState >= 2 && ui.outV.videoWidth)) return setNote("Go live first, then record");
-  const type = ["video/mp4;codecs=avc1.42E01E", "video/webm;codecs=vp9", "video/webm"].find((t) => window.MediaRecorder?.isTypeSupported(t));
+  // with the voice changer on: record the held-back video + the new voice, lined up
+  const withVoice = !!(delayLine && vout);
+  const types = withVoice
+    ? ["video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"]
+    : ["video/mp4;codecs=avc1.42E01E", "video/webm;codecs=vp9", "video/webm"];
+  const type = types.find((t) => window.MediaRecorder?.isTypeSupported(t));
   if (!type) return setNote("Recording is not supported in this browser");
+  const src = withVoice ? delayLine.video : ui.outV;
   const [W, H] = outSize(), c = document.createElement("canvas"); c.width = W; c.height = H;
-  const ctx = c.getContext("2d"); drawFramed(ctx, W, H);
-  const mr = new MediaRecorder(c.captureStream(30), { mimeType: type, videoBitsPerSecond: 6_000_000 });
+  const ctx = c.getContext("2d"); drawFramed(ctx, W, H, src);
+  const stream = c.captureStream(30);
+  if (withVoice) vout.stream.getAudioTracks().forEach((t) => stream.addTrack(t));
+  const mr = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 6_000_000 });
   const chunks = [], t0 = Date.now(), r = { mr };
   mr.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   mr.onstop = () => { rec = null; if (chunks.length) { download(new Blob(chunks, { type: type.split(";")[0] }), type.startsWith("video/mp4") ? "mp4" : "webm"); setNote("Recording saved"); } };
-  r.draw = setInterval(() => drawFramed(ctx, W, H), 1000 / 30);
+  r.draw = setInterval(() => drawFramed(ctx, W, H, src), 1000 / 30);
   r.clock = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); ui.rec.textContent = `Stop ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 500);
   rec = r; mr.start(1000);
   ui.rec.textContent = "Stop 0:00"; ui.rec.classList.add("on");
@@ -545,6 +558,81 @@ function toggleRecording() {
 ui.snap.addEventListener("click", takePhoto);
 ui.rec.addEventListener("click", toggleRecording);
 for (const ev of ["pointerdown", "dblclick", "wheel"]) ui.tools.addEventListener(ev, (e) => e.stopPropagation());
+
+
+// ---------- voice changer (ElevenLabs natural voice) ----------
+const VOICE_DELAY = 2500;   // ms the outputs wait so the new voice (1–2 s behind you) matches the lips
+let voice = null, vout = null, delayLine = null, sample = null;
+const avOffset = () => Number(ui.avOff.value) || 0;
+const voiceWanted = () => ui.voiceOn.checked && !!ui.voiceSel.value && !!cfg.engines?.voice;
+function saveVoicePrefs() {
+  try { localStorage.setItem("lc.voice", JSON.stringify({ on: ui.voiceOn.checked, id: ui.voiceSel.value, out: ui.voiceOut.value, hear: ui.voiceHear.checked, off: ui.avOff.value })); } catch {}
+}
+function loadVoicePrefs() {
+  try {
+    const v = JSON.parse(localStorage.getItem("lc.voice") || "{}");
+    ui.voiceOn.checked = !!v.on; ui.voiceHear.checked = !!v.hear;
+    if (v.off != null) ui.avOff.value = v.off;
+    ui.voiceSel.dataset.want = v.id || ""; ui.voiceOut.dataset.want = v.out || "";
+  } catch {}
+  ui.avOffVal.textContent = (avOffset() >= 0 ? "+" : "") + avOffset().toFixed(2) + " s";
+}
+async function loadVoices() {
+  if (!cfg.engines?.voice) { ui.voiceOn.disabled = true; ui.voiceHint.textContent = cfg.user?.isAdmin ? "Add your ElevenLabs key in Admin to turn this on." : "Voice changing is not set up yet."; return; }
+  ui.voiceOn.disabled = false;
+  try {
+    const r = await (await fetch("/api/voices")).json();
+    ui.voiceSel.innerHTML = '<option value="">Pick a voice</option>' + (r.voices || []).map((v) =>
+      `<option value="${v.id}" data-preview="${v.preview || ""}">${v.name.replace(/</g, "&lt;")}${v.gender ? " · " + v.gender : ""}${v.accent ? " · " + v.accent : ""}</option>`).join("");
+    ui.voiceSel.value = ui.voiceSel.dataset.want || "";
+  } catch {}
+  await loadOutputs();
+}
+async function loadOutputs() {
+  try {
+    const outs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audiooutput" && d.deviceId !== "default");
+    ui.voiceOut.innerHTML = '<option value="">Speakers / headphones</option>' + outs.map((d, i) =>
+      `<option value="${d.deviceId}">${(d.label || "Output " + (i + 1)).replace(/</g, "&lt;")}</option>`).join("");
+    ui.voiceOut.value = ui.voiceOut.dataset.want || "";
+  } catch {}
+}
+async function startVoice() {
+  if (voice || !run || !voiceWanted()) return;
+  vout = new VoiceOut();
+  vout.setHear(ui.voiceHear.checked);
+  if (ui.voiceOut.value && !(await vout.setDevice(ui.voiceOut.value))) setNote("Couldn't use that voice output, using the speakers");
+  delayLine = new DelayLine(ui.outV, VOICE_DELAY);
+  const v = new WebVoice({
+    voiceId: ui.voiceSel.value,
+    onPhrase: (f, at) => vout?.play(f, at + avOffset() * 1000 + VOICE_DELAY),
+    onState: (t) => setStats({ voice: t }),
+    onBalance: setBalance,
+    onError: (m, code) => { setNote(`Voice: ${m}`); if (code === 402 || code === 503) stopVoice(); },
+  });
+  voice = v;
+  try { await v.start(); } catch (e) { setNote(`Microphone: ${e?.message || e?.name}`); stopVoice(); return; }
+  if (desk?.active?.()) restartVcam();
+  loadOutputs();   // labels show once the mic is allowed
+}
+function stopVoice() {
+  const had = !!delayLine;
+  if (rec && delayLine) stopRecording();
+  voice?.stop(); voice = null;
+  vout?.close(); vout = null;
+  delayLine?.close(); delayLine = null;
+  if (had && desk?.active?.()) restartVcam();
+}
+ui.voiceOn.addEventListener("change", () => { saveVoicePrefs(); if (ui.voiceOn.checked) startVoice(); else stopVoice(); });
+ui.voiceSel.addEventListener("change", () => { saveVoicePrefs(); if (voice) { stopVoice(); startVoice(); } });
+ui.voiceOut.addEventListener("change", () => { saveVoicePrefs(); vout?.setDevice(ui.voiceOut.value); });
+ui.voiceHear.addEventListener("change", () => { saveVoicePrefs(); vout?.setHear(ui.voiceHear.checked); });
+ui.avOff.addEventListener("input", () => { ui.avOffVal.textContent = (avOffset() >= 0 ? "+" : "") + avOffset().toFixed(2) + " s"; saveVoicePrefs(); });
+ui.voicePlay.addEventListener("click", () => {
+  const url = ui.voiceSel.selectedOptions[0]?.dataset.preview;
+  if (sample) { sample.pause(); sample = null; return; }
+  if (!url) return setNote("Pick a voice first");
+  sample = new Audio(url); sample.onended = () => { sample = null; }; sample.play().catch(() => {});
+});
 
 // ---------- hotkeys (desktop app; work while another app is in front) ----------
 window.livecharDesktop?.onHotkey?.((name) => {
@@ -594,6 +682,7 @@ async function boot() {
   ui.presetRow.hidden = !cfg.user.isAdmin;
   loadChars().catch(() => {});
   listCameras().catch(() => {});
+  loadVoicePrefs(); loadVoices().catch(() => {});
   for (const o of ui.engine.options) {
     const on = ENGINES[o.value].kind === "lucy" ? cfg.engines.lucy : cfg.engines.eden;
     const rate = cfg.rates[o.value];

@@ -728,7 +728,7 @@ app.get("/api/admin/activity", requireAdmin, (_req, res) => {
 // The app splits the mic at short pauses and posts each phrase (16 kHz 16-bit mono PCM, up to 8 s).
 // The server converts it with the user's chosen voice and streams the new voice back (same format).
 // Billed per second of speech at rate_voice, gathered into one history line per burst of talking.
-const XI = "https://api.elevenlabs.io/v1";
+const XI = `${process.env.ELEVENLABS_API_BASE || "https://api.elevenlabs.io"}/v1`;   // override only for tests
 let voiceCache = { at: 0, list: [] };
 const voiceUse = new Map();   // userId -> { secs, last }
 app.get("/api/voices", requireUser, async (_req, res) => {
