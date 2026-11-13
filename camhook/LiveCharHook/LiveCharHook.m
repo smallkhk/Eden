@@ -337,7 +337,7 @@ static SEL kCbSel;   // captureOutput:didOutputSampleBuffer:fromConnection:
 static void lc_didOutput(id self, SEL _cmd, AVCaptureOutput *output, CMSampleBufferRef sb, AVCaptureConnection *conn) {
     LCEnsureLink();
     CVPixelBufferRef px = [LCFeed.shared copyLatest];
-    void (*orig)(id, SEL, id, CMSampleBufferRef, id) = (void *)objc_getAssociatedObject([self class], kCbSel);
+    void (*orig)(id, SEL, id, CMSampleBufferRef, id) = (__bridge void *)objc_getAssociatedObject([self class], kCbSel);
     if (px) {
         CMSampleBufferRef nb = LCWrap(px, sb);
         CVPixelBufferRelease(px);
