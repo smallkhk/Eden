@@ -63,7 +63,7 @@ struct StudioView: View {
         let size = live.outputSize
         return ZStack {
             RoundedRectangle(cornerRadius: 24, style: .continuous).fill(Theme.well)
-            VideoSurfaceView(mirrored: live.mirror, zoomable: true) { live.attachOutput($0) }
+            VideoSurfaceView(mirrored: live.previewMirrored, zoomable: true) { live.attachOutput($0) }
                 .aspectRatio(size.width / max(size.height, 1), contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous)
@@ -87,7 +87,7 @@ struct StudioView: View {
         }
         .overlay(alignment: .bottomLeading) {
             if showInput && (live.running || live.starting) {
-                VideoSurfaceView(mirrored: live.mirror, zoomable: false) { live.attachInput($0) }
+                VideoSurfaceView(mirrored: live.previewMirrored, zoomable: false) { live.attachInput($0) }
                     .aspectRatio(live.isPortraitOutput ? 9.0 / 16 : CGFloat(live.engineDef.width) / CGFloat(live.engineDef.height), contentMode: .fit)
                     .frame(width: live.isPortraitOutput ? 64 : 112)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -146,6 +146,7 @@ struct StudioView: View {
     private var controls: some View {
         VStack(alignment: .leading, spacing: 14) {
             if vClass == .compact { HStack { Logo(); Spacer(); Button { showAccount = true } label: { Image(systemName: "person.crop.circle.fill").font(.system(size: 26)) } } }
+            VideoSourceCard()
             if !live.note.isEmpty && (live.running || live.starting) {
                 Text(live.note).font(.footnote).foregroundStyle(Theme.text.opacity(0.85))
             }
@@ -157,9 +158,9 @@ struct StudioView: View {
                     ForEach(EngineDef.all) { e in Text(e.label).tag(e.id) }
                 }
                 .pickerStyle(.segmented)
-                .disabled(live.running || live.starting)
+                .disabled(live.running || live.starting || live.source == .videoFile)
                 HStack {
-                    Text(engineLine).font(.footnote).foregroundStyle(Theme.dim)
+                    Text(live.source == .videoFile ? "Off while playing a video file" : engineLine).font(.footnote).foregroundStyle(Theme.dim)
                     Spacer()
                     if live.engineDef.kind == .lucy {
                         Picker("", selection: Binding(get: { live.portrait }, set: { live.portrait = $0 })) {
@@ -239,7 +240,7 @@ struct StudioView: View {
             if live.running || live.starting {
                 Button { Task { await live.stop() } } label: { Label("Stop", systemImage: "stop.fill") }
                     .buttonStyle(GoButtonStyle(danger: true))
-                if live.running {
+                if live.running && live.source == .camera {
                     Button { Task { await live.apply() } } label: {
                         if live.applying { ProgressView().tint(Theme.ink) } else { Label("Apply", systemImage: "wand.and.stars") }
                     }

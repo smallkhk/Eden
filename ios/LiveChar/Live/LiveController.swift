@@ -51,6 +51,13 @@ final class FrameRouter: @unchecked Sendable {
 @MainActor
 final class LiveController: ObservableObject {
     // choices (kept between launches)
+    enum Source: String { case camera, videoFile }
+    @AppStorage("lc.source") var sourceRaw = Source.camera.rawValue { willSet { objectWillChange.send() } }
+    var source: Source { get { Source(rawValue: sourceRaw) ?? .camera } set { sourceRaw = newValue.rawValue } }
+    @Published var videoURL: URL?
+    @Published var videoName = ""
+    private var videoPlayer: VideoFilePlayer?
+
     @AppStorage("lc.engine") var engineID = "lucy" { willSet { objectWillChange.send() } }
     @AppStorage("lc.portrait") var portrait = true { willSet { objectWillChange.send() } }
     @AppStorage("lc.enhance") var enhance = true { willSet { objectWillChange.send() } }
@@ -105,6 +112,7 @@ final class LiveController: ObservableObject {
     private var stopping = false
 
     var engineDef: EngineDef { EngineDef.byID(engineID) }
+    var previewMirrored: Bool { source == .camera && mirror }
     /// camera + stream keep going when you switch to another app (PiP)
     var keepsRunningInBackground: Bool { camera.worksInBackground && PiPController.supported }
     var isPortraitOutput: Bool { engineDef.kind == .lucy && portrait }
@@ -156,6 +164,7 @@ final class LiveController: ObservableObject {
 
     func start() async {
         guard !running, !starting, let config else { return }
+        if source == .videoFile { await startVideoFile(); return }
         let def = engineDef
         starting = true; note = ""; stats = ""; status = "starting…"; statusLive = false
         UIApplication.shared.isIdleTimerDisabled = true
@@ -287,6 +296,7 @@ final class LiveController: ObservableObject {
         }
         if recording { await toggleRecording() }
         stopVoice()
+        stopVideoFile()
         stopShare()
         await e?.stop()
         camera.stop()
@@ -338,6 +348,43 @@ final class LiveController: ObservableObject {
             do { try await hub.stopRecording(); note = "Video saved to Photos" } catch { note = error.localizedDescription }
         } else {
             do { try hub.startRecording(); recordStart = Date(); recording = true } catch { note = error.localizedDescription }
+        }
+    }
+
+    // MARK: video file (plays straight to the live cam, no AI, no billing)
+
+    func startVideoFile() async {
+        guard let url = videoURL else { note = "Choose a video first"; return }
+        starting = true; note = ""; stats = ""; status = "starting video…"; statusLive = false
+        UIApplication.shared.isIdleTimerDisabled = true
+        outputSize = CGSize(width: 720, height: 1280)      // portrait, fills the screen
+        pip.setAspect(outputSize)
+        hub.reset()
+        AudioSessionSetup.activate()
+        let p = VideoFilePlayer(width: 720, height: 1280)
+        let hub = self.hub
+        var gotFirst = false
+        p.onFrame = { [weak self] pb in
+            hub.push(pb)
+            if !gotFirst { gotFirst = true; Task { @MainActor in self?.status = "playing video"; self?.statusLive = true } }
+        }
+        p.onError = { [weak self] m in Task { @MainActor in await self?.stop(reason: m) } }
+        videoPlayer = p
+        p.start(url: url)
+        pip.setEnabled(true)
+        if shareOn { startShare() }
+        running = true; starting = false
+    }
+
+    private func stopVideoFile() {
+        videoPlayer?.stop(); videoPlayer = nil
+    }
+
+    func setVideo(_ url: URL, name: String) {
+        videoURL = url; videoName = name
+        if running && source == .videoFile {
+            stopVideoFile()
+            Task { await startVideoFile() }
         }
     }
 

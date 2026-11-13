@@ -236,7 +236,7 @@ static OSType gPF; static size_t gPW, gPH;
 static NSLock *gConvLock;
 static CVPixelBufferRef gPlaceholder; static NSString *gPlaceholderText; static NSLock *gPhLock;
 
-static CVPixelBufferRef LCConvert(CVPixelBufferRef src, OSType fmt, size_t w, size_t h) CF_RETURNS_RETAINED {
+static CVPixelBufferRef LCConvert(CVPixelBufferRef src, OSType fmt, size_t w, size_t h, CGFloat rotateDeg) CF_RETURNS_RETAINED {
     if (w == 0 || h == 0) return NULL;
     if (!gConvLock) gConvLock = [NSLock new];
     [gConvLock lock];
@@ -252,7 +252,13 @@ static CVPixelBufferRef LCConvert(CVPixelBufferRef src, OSType fmt, size_t w, si
     CVPixelBufferRef dst = NULL;
     if (CVPixelBufferPoolCreatePixelBuffer(NULL, gPool, &dst) != kCVReturnSuccess || !dst) { [gConvLock unlock]; return NULL; }
     CIImage *img = [CIImage imageWithCVPixelBuffer:src];
-    size_t sw = CVPixelBufferGetWidth(src), sh = CVPixelBufferGetHeight(src);
+    if (rotateDeg != 0) {   // pre-rotate so the frame lands upright after the app/receiver rotates it back
+        CGAffineTransform r = CGAffineTransformMakeRotation(rotateDeg * (CGFloat)M_PI / 180.0);
+        img = [img imageByApplyingTransform:r];
+        CGRect re = img.extent;
+        img = [img imageByApplyingTransform:CGAffineTransformMakeTranslation(-re.origin.x, -re.origin.y)];
+    }
+    size_t sw = (size_t)img.extent.size.width, sh = (size_t)img.extent.size.height;
     CGFloat scale = MAX((CGFloat)w / sw, (CGFloat)h / sh);                 // aspect-fill
     img = [img imageByApplyingTransform:CGAffineTransformMakeScale(scale, scale)];
     CGRect e = img.extent;
@@ -263,6 +269,22 @@ static CVPixelBufferRef LCConvert(CVPixelBufferRef src, OSType fmt, size_t w, si
     CGColorSpaceRelease(cs);
     [gConvLock unlock];
     return dst;
+}
+
+// How much to pre-rotate so the substitute matches how the app will display the real camera.
+static CGFloat LCRotationFor(AVCaptureConnection *conn, size_t w, size_t h) {
+    CGFloat deg = 0;
+    if (@available(iOS 17.0, *)) { if (conn && conn.isVideoRotationAngleSupported) deg = conn.videoRotationAngle; }
+    else if (conn && conn.isVideoOrientationSupported) {
+        switch (conn.videoOrientation) {
+            case AVCaptureVideoOrientationPortrait: deg = 90; break;
+            case AVCaptureVideoOrientationPortraitUpsideDown: deg = 270; break;
+            case AVCaptureVideoOrientationLandscapeLeft: deg = 180; break;
+            default: deg = 0; break;   // landscapeRight
+        }
+    }
+    if (deg == 0 && w > h) deg = 90;   // landscape buffer with no hint: assume the receiver rotates 90
+    return -deg;                       // cancel the app's rotation
 }
 
 // A black frame with the hook's status text — sent to the call when there is no live feed, so the
@@ -463,7 +485,7 @@ static void lc_didOutput(id self, SEL _cmd, AVCaptureOutput *output, CMSampleBuf
         OSType fmt = ob ? CVPixelBufferGetPixelFormatType(ob) : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
         size_t w = ob ? CVPixelBufferGetWidth(ob) : CVPixelBufferGetWidth(px);
         size_t h = ob ? CVPixelBufferGetHeight(ob) : CVPixelBufferGetHeight(px);
-        CVPixelBufferRef conv = LCConvert(px, fmt, w, h);   // match what the app expects
+        CVPixelBufferRef conv = LCConvert(px, fmt, w, h, LCRotationFor(conn, w, h));   // match format + orientation
         CVPixelBufferRelease(px);
         if (conv) {
             CMSampleBufferRef nb = LCWrap(conv, sb);
@@ -477,7 +499,7 @@ static void lc_didOutput(id self, SEL _cmd, AVCaptureOutput *output, CMSampleBuf
         size_t w = ob ? CVPixelBufferGetWidth(ob) : 720, h = ob ? CVPixelBufferGetHeight(ob) : 1280;
         CVPixelBufferRef ph = LCPlaceholder();
         if (ph) {
-            CVPixelBufferRef conv = LCConvert(ph, fmt, w, h);
+            CVPixelBufferRef conv = LCConvert(ph, fmt, w, h, LCRotationFor(conn, w, h));
             CVPixelBufferRelease(ph);
             if (conv) {
                 CMSampleBufferRef nb = LCWrap(conv, sb);
