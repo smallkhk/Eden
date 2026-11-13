@@ -30,6 +30,7 @@ static NSString *const kLinkKey = @"livechar.hooklink";
 @property (class, readonly) LCFeed *shared;
 - (void)ensureRunning;
 - (CVPixelBufferRef)copyLatest CF_RETURNS_RETAINED;   // nil if nothing decoded yet
+@property (atomic, copy) NSString *state;
 @end
 
 static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfoFlags flags,
@@ -89,12 +90,23 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
     @synchronized (self) {
         if (_running) return;
         NSURL *url = [self streamURL];
-        if (!url) return;
+        if (!url) { self.state = @"paste your live link"; return; }
         _running = YES;
+        self.state = @"connecting\u2026";
         _buf = [NSMutableData data];
         _task = [_session dataTaskWithURL:url];
         [_task resume];
     }
+}
+
+- (void)URLSession:(NSURLSession *)s dataTask:(NSURLSessionDataTask *)t
+                                     didReceiveResponse:(NSURLResponse *)resp
+                                      completionHandler:(void (^)(NSURLSessionResponseDisposition))done {
+    NSInteger code = [resp isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)resp).statusCode : 0;
+    if (code == 200) self.state = @"connected \u2014 waiting for LiveChar";
+    else if (code == 404) self.state = @"link not found (update server / reset link)";
+    else self.state = [NSString stringWithFormat:@"server error %ld", (long)code];
+    done(code == 200 ? NSURLSessionResponseAllow : NSURLSessionResponseCancel);
 }
 
 - (void)URLSession:(NSURLSession *)s dataTask:(NSURLSessionDataTask *)t didReceiveData:(NSData *)data {
@@ -112,6 +124,7 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
 
 - (void)URLSession:(NSURLSession *)s task:(NSURLSessionTask *)t didCompleteWithError:(NSError *)e {
     @synchronized (self) { _running = NO; }
+    self.state = @"reconnecting\u2026";
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_global_queue(0, 0), ^{
         [self ensureRunning];
     });
@@ -189,6 +202,7 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
 - (void)storeFrame:(CVImageBufferRef)image {
     if (!image) return;
     CVPixelBufferRef px = (CVPixelBufferRef)image;
+    self.state = [NSString stringWithFormat:@"live %zu\u00d7%zu", CVPixelBufferGetWidth(px), CVPixelBufferGetHeight(px)];
     CVPixelBufferRetain(px);
     [_lock lock];
     CVPixelBufferRef old = _latest; _latest = px;
@@ -272,7 +286,8 @@ static void LCSwizzle(Class cls, SEL a, SEL b) {
 
 #pragma mark - preview overlay (AVCaptureVideoPreviewLayer)
 
-static const void *kOverlayKey = &kOverlayKey;
+static const void *kDispKey = &kDispKey;
+static const void *kTextKey = &kTextKey;
 static NSHashTable *gPreviews;      // weak set of live preview layers
 static CADisplayLink *gLink;
 
@@ -283,31 +298,54 @@ static CADisplayLink *gLink;
 + (void)tick {
     LCEnsureLink();
     CVPixelBufferRef px = [LCFeed.shared copyLatest];
-    if (!px) return;
-    CMSampleBufferRef sb = LCWrap(px, NULL);
-    CVPixelBufferRelease(px);
-    if (!sb) return;
-    CFArrayRef att = CMSampleBufferGetSampleAttachmentsArray(sb, true);
-    if (att && CFArrayGetCount(att)) {
-        CFMutableDictionaryRef d = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(att, 0);
-        CFDictionarySetValue(d, kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
+    CMSampleBufferRef sb = NULL;
+    if (px) {
+        sb = LCWrap(px, NULL);
+        CVPixelBufferRelease(px);
+        if (sb) {
+            CFArrayRef att = CMSampleBufferGetSampleAttachmentsArray(sb, true);
+            if (att && CFArrayGetCount(att)) {
+                CFMutableDictionaryRef d = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(att, 0);
+                CFDictionarySetValue(d, kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
+            }
+        }
     }
+    NSString *state = LCFeed.shared.state ?: @"starting\u2026";
     @synchronized (gPreviews) {
         for (AVCaptureVideoPreviewLayer *pl in gPreviews.allObjects) {
-            AVSampleBufferDisplayLayer *disp = objc_getAssociatedObject(pl, kOverlayKey);
+            AVSampleBufferDisplayLayer *disp = objc_getAssociatedObject(pl, kDispKey);
+            CATextLayer *text = objc_getAssociatedObject(pl, kTextKey);
             if (!disp) {
                 disp = [AVSampleBufferDisplayLayer layer];
                 disp.videoGravity = AVLayerVideoGravityResizeAspectFill;
+                disp.backgroundColor = [UIColor blackColor].CGColor;   // covers the real camera, so the hook is visibly active
                 [pl addSublayer:disp];
-                objc_setAssociatedObject(pl, kOverlayKey, disp, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                objc_setAssociatedObject(pl, kDispKey, disp, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                text = [CATextLayer layer];
+                text.fontSize = 15; text.alignmentMode = kCAAlignmentCenter; text.truncationMode = kCATruncationEnd;
+                text.foregroundColor = [UIColor whiteColor].CGColor;
+                text.contentsScale = UIScreen.mainScreen.scale;
+                [pl addSublayer:text];
+                objc_setAssociatedObject(pl, kTextKey, text, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             }
+            [CATransaction begin]; [CATransaction setDisableActions:YES];
             disp.frame = pl.bounds;
-            if (disp.status == AVQueuedSampleBufferRenderingStatusFailed) [disp flush];
-            [disp enqueueSampleBuffer:sb];
+            text.frame = CGRectMake(8, pl.bounds.size.height / 2 - 12, pl.bounds.size.width - 16, 24);
+            if (sb) {
+                if (disp.status == AVQueuedSampleBufferRenderingStatusFailed) [disp flush];
+                [disp enqueueSampleBuffer:sb];
+                text.hidden = YES;
+            } else {
+                text.string = [NSString stringWithFormat:@"LiveChar hook \u2014 %@", state];
+                text.hidden = NO;
+            }
+            [CATransaction commit];
         }
     }
-    CFRelease(sb);
+    if (sb) CFRelease(sb);
 }
+@end
+
 @end
 
 static void LCRegisterPreview(AVCaptureVideoPreviewLayer *pl) {
