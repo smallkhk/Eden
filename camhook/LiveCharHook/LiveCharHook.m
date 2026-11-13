@@ -234,6 +234,7 @@ static CIContext *gCI;
 static CVPixelBufferPoolRef gPool;
 static OSType gPF; static size_t gPW, gPH;
 static NSLock *gConvLock;
+static CVPixelBufferRef gPlaceholder; static NSString *gPlaceholderText; static NSLock *gPhLock;
 
 static CVPixelBufferRef LCConvert(CVPixelBufferRef src, OSType fmt, size_t w, size_t h) CF_RETURNS_RETAINED {
     if (w == 0 || h == 0) return NULL;
@@ -262,6 +263,49 @@ static CVPixelBufferRef LCConvert(CVPixelBufferRef src, OSType fmt, size_t w, si
     CGColorSpaceRelease(cs);
     [gConvLock unlock];
     return dst;
+}
+
+// A black frame with the hook's status text — sent to the call when there is no live feed, so the
+// outgoing video is always the hook (and never the real camera) even before you go live.
+static CVPixelBufferRef LCMakeText(NSString *full, size_t w, size_t h) CF_RETURNS_RETAINED {
+    NSDictionary *attrs = @{ (id)kCVPixelBufferCGBitmapContextCompatibilityKey: @YES,
+                             (id)kCVPixelBufferCGImageCompatibilityKey: @YES,
+                             (id)kCVPixelBufferIOSurfacePropertiesKey: @{} };
+    CVPixelBufferRef pb = NULL;
+    if (CVPixelBufferCreate(NULL, w, h, kCVPixelFormatType_32BGRA, (__bridge CFDictionaryRef)attrs, &pb) != kCVReturnSuccess) return NULL;
+    CVPixelBufferLockBaseAddress(pb, 0);
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(CVPixelBufferGetBaseAddress(pb), w, h, 8, CVPixelBufferGetBytesPerRow(pb), cs,
+                                             kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+    if (ctx) {
+        CGContextSetRGBFillColor(ctx, 0, 0, 0, 1); CGContextFillRect(ctx, CGRectMake(0, 0, w, h));
+        CGContextSetRGBFillColor(ctx, 1.0, 0.36, 0.54, 1); CGContextFillEllipseInRect(ctx, CGRectMake(w / 2 - 16, h * 0.40, 32, 32));
+        CGContextTranslateCTM(ctx, 0, h); CGContextScaleCTM(ctx, 1, -1);     // flip to UIKit coords for text
+        UIGraphicsPushContext(ctx);
+        NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new]; ps.alignment = NSTextAlignmentCenter;
+        NSDictionary *ta = @{ NSFontAttributeName: [UIFont boldSystemFontOfSize:w * 0.06],
+                              NSForegroundColorAttributeName: UIColor.whiteColor, NSParagraphStyleAttributeName: ps };
+        [full drawInRect:CGRectMake(20, h * 0.46, w - 40, h * 0.30) withAttributes:ta];
+        UIGraphicsPopContext();
+        CGContextRelease(ctx);
+    }
+    CGColorSpaceRelease(cs);
+    CVPixelBufferUnlockBaseAddress(pb, 0);
+    return pb;
+}
+
+static CVPixelBufferRef LCPlaceholder(void) CF_RETURNS_RETAINED {
+    if (!gPhLock) gPhLock = [NSLock new];
+    NSString *full = [NSString stringWithFormat:@"LiveChar\n%@", LCFeed.shared.state ?: @"starting\u2026"];
+    [gPhLock lock];
+    if (!gPlaceholder || ![full isEqualToString:gPlaceholderText]) {
+        if (gPlaceholder) { CVPixelBufferRelease(gPlaceholder); gPlaceholder = NULL; }
+        gPlaceholder = LCMakeText(full, 720, 1280);
+        gPlaceholderText = [full copy];
+    }
+    CVPixelBufferRef out = gPlaceholder ? (CVPixelBufferRef)CVPixelBufferRetain(gPlaceholder) : NULL;
+    [gPhLock unlock];
+    return out;
 }
 
 #pragma mark - helpers
@@ -425,6 +469,21 @@ static void lc_didOutput(id self, SEL _cmd, AVCaptureOutput *output, CMSampleBuf
             CMSampleBufferRef nb = LCWrap(conv, sb);
             CVPixelBufferRelease(conv);
             if (nb) { if (orig) orig(self, _cmd, output, nb, conn); CFRelease(nb); return; }
+        }
+    } else {
+        // no live feed: send the waiting panel, never the real camera
+        CVImageBufferRef ob = CMSampleBufferGetImageBuffer(sb);
+        OSType fmt = ob ? CVPixelBufferGetPixelFormatType(ob) : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+        size_t w = ob ? CVPixelBufferGetWidth(ob) : 720, h = ob ? CVPixelBufferGetHeight(ob) : 1280;
+        CVPixelBufferRef ph = LCPlaceholder();
+        if (ph) {
+            CVPixelBufferRef conv = LCConvert(ph, fmt, w, h);
+            CVPixelBufferRelease(ph);
+            if (conv) {
+                CMSampleBufferRef nb = LCWrap(conv, sb);
+                CVPixelBufferRelease(conv);
+                if (nb) { if (orig) orig(self, _cmd, output, nb, conn); CFRelease(nb); return; }
+            }
         }
     }
     if (orig) orig(self, _cmd, output, sb, conn);
