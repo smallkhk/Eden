@@ -292,7 +292,7 @@ static CGFloat LCRotationFor(AVCaptureConnection *conn, size_t w, size_t h) {
         }
     }
     if (deg == 0 && w > h) deg = 90;   // landscape buffer with no hint: assume the receiver rotates 90
-    return -deg;                       // cancel the app's rotation
+    return 180 - deg;                  // cancel the app's rotation (was upside down at -deg)
 }
 
 // A black frame with the hook's status text — sent to the call when there is no live feed, so the
@@ -486,31 +486,14 @@ static SEL kCbSel;   // captureOutput:didOutputSampleBuffer:fromConnection:
 
 static void lc_didOutput(id self, SEL _cmd, AVCaptureOutput *output, CMSampleBufferRef sb, AVCaptureConnection *conn) {
     LCEnsureLink();
-    uint64_t seq = 0;
-    CVPixelBufferRef px = [LCFeed.shared copyLatestSeq:&seq];
+    CVPixelBufferRef px = [LCFeed.shared copyLatest];
     void (*orig)(id, SEL, id, CMSampleBufferRef, id) = (__bridge void *)objc_getAssociatedObject([self class], kCbSel);
     if (px) {
         CVImageBufferRef ob = CMSampleBufferGetImageBuffer(sb);
         OSType fmt = ob ? CVPixelBufferGetPixelFormatType(ob) : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
         size_t w = ob ? CVPixelBufferGetWidth(ob) : CVPixelBufferGetWidth(px);
         size_t h = ob ? CVPixelBufferGetHeight(ob) : CVPixelBufferGetHeight(px);
-        CGFloat deg = LCRotationFor(conn, w, h);
-        if (!gCacheLock) gCacheLock = [NSLock new];
-        CVPixelBufferRef conv = NULL;
-        [gCacheLock lock];
-        if (gConvCache && gCacheSeq == seq && gCacheFmt == fmt && gCacheW == w && gCacheH == h && gCacheDeg == deg)
-            conv = (CVPixelBufferRef)CVPixelBufferRetain(gConvCache);   // same decoded frame + geometry: reuse
-        [gCacheLock unlock];
-        if (!conv) {
-            conv = LCConvert(px, fmt, w, h, deg);                       // new frame: convert once, then cache
-            if (conv) {
-                [gCacheLock lock];
-                if (gConvCache) CVPixelBufferRelease(gConvCache);
-                gConvCache = (CVPixelBufferRef)CVPixelBufferRetain(conv);
-                gCacheSeq = seq; gCacheFmt = fmt; gCacheW = w; gCacheH = h; gCacheDeg = deg;
-                [gCacheLock unlock];
-            }
-        }
+        CVPixelBufferRef conv = LCConvert(px, fmt, w, h, LCRotationFor(conn, w, h));
         CVPixelBufferRelease(px);
         if (conv) {
             CMSampleBufferRef nb = LCWrap(conv, sb);
