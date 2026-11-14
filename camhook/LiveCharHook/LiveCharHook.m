@@ -31,6 +31,7 @@ static NSString *const kLinkKey = @"livechar.hooklink";
 @property (class, readonly) LCFeed *shared;
 - (void)ensureRunning;
 - (CVPixelBufferRef)copyLatest CF_RETURNS_RETAINED;   // nil if nothing decoded yet
+- (CVPixelBufferRef)copyLatestSeq:(uint64_t *)seq CF_RETURNS_RETAINED;
 @property (atomic, copy) NSString *state;
 @end
 
@@ -47,6 +48,7 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
     VTDecompressionSessionRef _decoder;
     BOOL _needKey;
     CVPixelBufferRef _latest;
+    uint64_t _seq;
     NSLock *_lock;
 }
 
@@ -206,14 +208,19 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
     self.state = [NSString stringWithFormat:@"live %zu\u00d7%zu", CVPixelBufferGetWidth(px), CVPixelBufferGetHeight(px)];
     CVPixelBufferRetain(px);
     [_lock lock];
-    CVPixelBufferRef old = _latest; _latest = px;
+    CVPixelBufferRef old = _latest; _latest = px; _seq++;
     [_lock unlock];
     if (old) CVPixelBufferRelease(old);
 }
 
 - (CVPixelBufferRef)copyLatest {
+    return [self copyLatestSeq:NULL];
+}
+
+- (CVPixelBufferRef)copyLatestSeq:(uint64_t *)seq {
     [_lock lock];
     CVPixelBufferRef px = _latest ? (CVPixelBufferRef)CVPixelBufferRetain(_latest) : NULL;
+    if (seq) *seq = _seq;
     [_lock unlock];
     return px;
 }
@@ -235,6 +242,7 @@ static CVPixelBufferPoolRef gPool;
 static OSType gPF; static size_t gPW, gPH;
 static NSLock *gConvLock;
 static CVPixelBufferRef gPlaceholder; static NSString *gPlaceholderText; static NSLock *gPhLock;
+static CVPixelBufferRef gConvCache; static uint64_t gCacheSeq; static OSType gCacheFmt; static size_t gCacheW, gCacheH; static CGFloat gCacheDeg; static NSLock *gCacheLock;
 
 static CVPixelBufferRef LCConvert(CVPixelBufferRef src, OSType fmt, size_t w, size_t h, CGFloat rotateDeg) CF_RETURNS_RETAINED {
     if (w == 0 || h == 0) return NULL;
@@ -478,14 +486,31 @@ static SEL kCbSel;   // captureOutput:didOutputSampleBuffer:fromConnection:
 
 static void lc_didOutput(id self, SEL _cmd, AVCaptureOutput *output, CMSampleBufferRef sb, AVCaptureConnection *conn) {
     LCEnsureLink();
-    CVPixelBufferRef px = [LCFeed.shared copyLatest];
+    uint64_t seq = 0;
+    CVPixelBufferRef px = [LCFeed.shared copyLatestSeq:&seq];
     void (*orig)(id, SEL, id, CMSampleBufferRef, id) = (__bridge void *)objc_getAssociatedObject([self class], kCbSel);
     if (px) {
         CVImageBufferRef ob = CMSampleBufferGetImageBuffer(sb);
         OSType fmt = ob ? CVPixelBufferGetPixelFormatType(ob) : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
         size_t w = ob ? CVPixelBufferGetWidth(ob) : CVPixelBufferGetWidth(px);
         size_t h = ob ? CVPixelBufferGetHeight(ob) : CVPixelBufferGetHeight(px);
-        CVPixelBufferRef conv = LCConvert(px, fmt, w, h, LCRotationFor(conn, w, h));   // match format + orientation
+        CGFloat deg = LCRotationFor(conn, w, h);
+        if (!gCacheLock) gCacheLock = [NSLock new];
+        CVPixelBufferRef conv = NULL;
+        [gCacheLock lock];
+        if (gConvCache && gCacheSeq == seq && gCacheFmt == fmt && gCacheW == w && gCacheH == h && gCacheDeg == deg)
+            conv = (CVPixelBufferRef)CVPixelBufferRetain(gConvCache);   // same decoded frame + geometry: reuse
+        [gCacheLock unlock];
+        if (!conv) {
+            conv = LCConvert(px, fmt, w, h, deg);                       // new frame: convert once, then cache
+            if (conv) {
+                [gCacheLock lock];
+                if (gConvCache) CVPixelBufferRelease(gConvCache);
+                gConvCache = (CVPixelBufferRef)CVPixelBufferRetain(conv);
+                gCacheSeq = seq; gCacheFmt = fmt; gCacheW = w; gCacheH = h; gCacheDeg = deg;
+                [gCacheLock unlock];
+            }
+        }
         CVPixelBufferRelease(px);
         if (conv) {
             CMSampleBufferRef nb = LCWrap(conv, sb);
