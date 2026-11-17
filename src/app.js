@@ -328,7 +328,7 @@ async function startEdenGpu(eng) {
   dc.onopen = () => {
     const m = { type: "configure" };
     if (promptText()) m.prompt = promptText();
-    if (look) m[look.startsWith("data:") ? "image" : "image_url"] = look;
+    if (look && !look.startsWith("data:")) m.image_url = look;   // data URLs went with the offer (too big for the channel)
     dc.send(JSON.stringify(m));
     pingTimer = setInterval(() => dc.readyState === "open" && dc.send(JSON.stringify({ type: "ping", ts: Date.now() })), 3000);
   };
@@ -350,7 +350,7 @@ async function startEdenGpu(eng) {
   });
   const r = await fetch(`${url}/offer`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type, token }),
+    body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type, token, ...(look?.startsWith("data:") ? { image: look } : {}) }),
   });
   const ans = await r.json().catch(() => ({}));
   if (!r.ok) { pc.close(); throw new Error(ans.error || `GPU HTTP ${r.status}`); }
@@ -366,9 +366,12 @@ async function startEdenGpu(eng) {
     apply: async () => {
       if (refDirty) {
         const img = await lookFrame();
-        const m = { type: "reset", ...(promptText() ? { prompt: promptText() } : {}) };
-        if (img) m[img.startsWith("data:") ? "image" : "image_url"] = img;
-        dc.send(JSON.stringify(m));
+        const p = promptText() ? { prompt: promptText() } : {};
+        if (img?.startsWith("data:")) {
+          const { token: t } = await api("/api/gpu/connect", { id: bill?.id });   // fresh ticket
+          const r = await fetch(`${url}/reset`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: t, image: img, ...p }) });
+          if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "Could not change the character");
+        } else dc.send(JSON.stringify({ type: "reset", ...(img ? { image_url: img } : {}), ...p }));
       } else if (promptText()) {
         dc.send(JSON.stringify({ type: "prompt", prompt: promptText() }));
       }

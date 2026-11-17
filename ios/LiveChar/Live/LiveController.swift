@@ -4,7 +4,7 @@ import SwiftUI
 import UIKit
 
 struct EngineDef: Identifiable, Hashable {
-    enum Kind { case lucy, eden }
+    enum Kind { case lucy, eden, edenGpu }
     let id: String
     let label: String
     let detail: String
@@ -19,6 +19,7 @@ struct EngineDef: Identifiable, Hashable {
         EngineDef(id: "lucy", label: "Lucy", detail: "Decart · 720p · fastest", kind: .lucy, endpoint: "", width: 1280, height: 720, fps: 30, price: 0),
         EngineDef(id: "eden-5b", label: "Eden 5B", detail: "720p · 24 fps", kind: .eden, endpoint: "vast/eden-live-5b-video", width: 1280, height: 704, fps: 24, price: 0.0035),
         EngineDef(id: "eden-14b", label: "Eden 14B", detail: "480p · 16 fps", kind: .eden, endpoint: "vast/eden-live-14b-video", width: 832, height: 480, fps: 16, price: 0.01),
+        EngineDef(id: "eden-gpu", label: "My GPU", detail: "Eden 5B · own GPU · 720p · 24 fps", kind: .edenGpu, endpoint: "", width: 1280, height: 704, fps: 24, price: 0),
     ]
     static func byID(_ id: String) -> EngineDef { all.first { $0.id == id } ?? all[0] }
 }
@@ -212,6 +213,20 @@ final class LiveController: ObservableObject {
                 var imageURL: String?
                 if let refData { imageURL = try await anchor(refData, width: w, height: h) }
                 try await eng.start(prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines), imageURL: imageURL, enhance: enhance)
+            case .edenGpu:
+                let eng = GpuEdenEngine(sessionID: s.id, events: events)
+                let falLook = config.engines.eden
+                // character look: FLUX frame on fal when a fal key is set, else the image itself
+                let look: (Data) async throws -> String = { [weak self] img in
+                    guard let self else { throw APIError(message: "Stopped", status: 0) }
+                    if falLook { return try await self.anchor(img, width: w, height: h) }
+                    return "data:image/jpeg;base64," + img.base64EncodedString()
+                }
+                eng.buildLook = look
+                engine = eng; router.engine = eng
+                var first: String?
+                if let refData { first = try await look(refData) }
+                try await eng.start(prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines), look: first)
             }
             refDirty = false
             running = true

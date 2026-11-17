@@ -26,6 +26,13 @@ struct StudioView: View {
             }
         }
         .screenBackground()
+        .task(id: live.engineID) {
+            // own GPU: keep its on/off status fresh while it is selected
+            while live.engineID == "eden-gpu", !Task.isCancelled {
+                if !live.running { await app.refreshUser() }
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+            }
+        }
         .sheet(isPresented: $showAccount) { AccountView().environmentObject(app).environmentObject(live) }
         .onChange(of: phase) { p in
             // with PiP the camera keeps running behind other apps; without it iOS pauses the camera, so stop billing
@@ -224,8 +231,16 @@ struct StudioView: View {
     private var engineLine: String {
         let e = live.engineDef
         let rate = app.config?.rates[e.id] ?? 1
-        let enabled = e.kind == .lucy ? (app.config?.engines.lucy ?? false) : (app.config?.engines.eden ?? false)
-        if !enabled { return "\(e.detail) · not set up" }
+        let enabled: Bool
+        switch e.kind {
+        case .lucy: enabled = app.config?.engines.lucy ?? false
+        case .eden: enabled = app.config?.engines.eden ?? false
+        case .edenGpu: enabled = app.config?.engines.gpu ?? false
+        }
+        if !enabled {
+            if e.kind == .edenGpu { return "\(e.detail) · " + (app.config?.engines.gpuStage == "starting" ? "GPU starting…" : "GPU off") }
+            return "\(e.detail) · not set up"
+        }
         return rate != 1 ? "\(e.detail) · \(String(format: "%g", rate))× rate" : e.detail
     }
 

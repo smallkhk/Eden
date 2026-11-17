@@ -132,7 +132,7 @@ struct User: Codable, Equatable {
 }
 
 struct AppConfig: Codable {
-    struct Engines: Codable { let lucy: Bool; let eden: Bool; let voice: Bool? }
+    struct Engines: Codable { let lucy: Bool; let eden: Bool; let voice: Bool?; let gpu: Bool?; let gpuStage: String? }
     let user: User?
     let hasUsers: Bool
     let allowSignup: Bool

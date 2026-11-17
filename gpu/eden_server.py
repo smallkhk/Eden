@@ -38,6 +38,7 @@ STUB = os.environ.get("LC_STUB") == "1"
 state = {"ready": False, "stage": "starting", "busy": False, "profile": None}
 engine = None
 pcs = set()
+current = {"sid": None, "apply": None}     # the one live session (one GPU)
 
 
 def set_stage(s):
@@ -175,6 +176,8 @@ async def offer(req):
 
     live = LiveSession(claims.get("max", 300), out.push, send)
     live.fps = None
+    # big images (data URLs) come over HTTP, not the data channel (~256 KB message limit)
+    initial = {"image": body.get("image"), "prompt": body.get("prompt")}
     gen = {"thread": None, "closing": False}
 
     async def finish():
@@ -186,6 +189,8 @@ async def offer(req):
         if gen["thread"]:
             await loop.run_in_executor(None, gen["thread"].join, 30)
         state["busy"] = False
+        if current["apply"] is reset:
+            current["sid"], current["apply"] = None, None
         await pc.close()
         pcs.discard(pc)
 
@@ -198,6 +203,15 @@ async def offer(req):
         while not live.ended:
             await asyncio.sleep(2)
             send({"type": "stats", "generation_fps": round(live.fps, 1) if live.fps else None, "profile": state["profile"]})
+
+    async def reset(m):
+        if m.get("prompt"):
+            live.prompt = str(m["prompt"]).strip()[:1500]
+        live.cover_path = await load_cover(m, live)
+        live.restart = True
+        live.feed.interrupt()
+
+    current["sid"], current["apply"] = claims.get("sid"), reset
 
     @pc.on("datachannel")
     def on_dc(dc):
@@ -214,7 +228,9 @@ async def offer(req):
                 dc.send(json.dumps({"type": "pong", "client_ts": m.get("ts")}))
             elif t == "configure" and gen["thread"] is None:
                 async def go():
-                    live.prompt = (m.get("prompt") or "").strip() or live.prompt
+                    if not (m.get("image_url") or m.get("image")) and initial["image"]:
+                        m["image"] = initial["image"]
+                    live.prompt = (m.get("prompt") or initial["prompt"] or "").strip() or live.prompt
                     live.cover_path = await load_cover(m, live)
                     start_generation()
                     send({"type": "configured"})
@@ -223,13 +239,7 @@ async def offer(req):
             elif t == "prompt" and m.get("prompt"):
                 live.prompt = str(m["prompt"]).strip()[:1500]
             elif t == "reset":
-                async def again():
-                    if m.get("prompt"):
-                        live.prompt = str(m["prompt"]).strip()[:1500]
-                    live.cover_path = await load_cover(m, live)
-                    live.restart = True
-                    live.feed.interrupt()
-                asyncio.ensure_future(again())
+                asyncio.ensure_future(reset(m))
             elif t == "stop":
                 asyncio.ensure_future(finish())
 
@@ -256,6 +266,16 @@ async def offer(req):
     return web.json_response({"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}, headers=CORS)
 
 
+async def reset_http(req):
+    """New character for the live session, with the image in the body (no size limit)."""
+    body = await req.json()
+    claims = check_token(body.get("token"))
+    if not claims or claims.get("sid") != current["sid"] or not current["apply"]:
+        return web.json_response({"error": "No live session"}, status=403, headers=CORS)
+    await current["apply"]({k: body[k] for k in ("image", "image_url", "prompt") if body.get(k)})
+    return web.json_response({"ok": True}, headers=CORS)
+
+
 def load_engine():
     global engine
     try:
@@ -277,6 +297,7 @@ def main():
     app = web.Application(client_max_size=16 * 1024 * 1024)
     app.router.add_get("/health", health)
     app.router.add_post("/offer", offer)
+    app.router.add_post("/reset", reset_http)
     app.router.add_route("OPTIONS", "/{tail:.*}", options)
     web.run_app(app, host="0.0.0.0", port=PORT, print=None)
 
