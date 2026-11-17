@@ -2,7 +2,7 @@ name: Build LiveChar camera hook (dylib)
 
 on:
   push:
-    branches: [main]
+    branches: [main, gpu-runpod]
     paths: ["camhook/**", ".github/workflows/build-camhook.yml"]
   workflow_dispatch:
 

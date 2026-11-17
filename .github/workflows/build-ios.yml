@@ -2,7 +2,7 @@ name: Build iOS app
 
 on:
   push:
-    branches: [main, "ios-*"]
+    branches: [main, "ios-*", gpu-runpod]
     paths: ["ios/**", "extension/**", ".github/workflows/build-ios.yml"]
   workflow_dispatch:
     inputs:
