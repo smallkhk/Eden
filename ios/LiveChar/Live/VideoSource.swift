@@ -14,10 +14,13 @@ final class VideoFilePlayer {
     private let width: Int, height: Int
     private var observer: NSObjectProtocol?
 
+    /// Degrees to rotate each frame before fitting (0/90/180/270). Changeable while playing.
+    var rotation = 0
+
     var onFrame: ((CVPixelBuffer) -> Void)?
     var onError: ((String) -> Void)?
 
-    init(width: Int, height: Int) { self.width = width; self.height = height }
+    init(width: Int, height: Int, rotation: Int = 0) { self.width = width; self.height = height; self.rotation = rotation }
 
     func start(url: URL) {
         let item = AVPlayerItem(url: url)
@@ -44,7 +47,13 @@ final class VideoFilePlayer {
         let t = output.itemTime(forHostTime: host)
         guard t.isValid, output.hasNewPixelBuffer(forItemTime: t),
               let pb = output.copyPixelBuffer(forItemTime: t, itemTimeForDisplay: nil) else { return }
-        let img = FrameOps.cover(CIImage(cvPixelBuffer: pb), width, height)
+        var src = CIImage(cvPixelBuffer: pb)
+        let deg = ((rotation % 360) + 360) % 360
+        if deg != 0 {
+            let r = src.transformed(by: CGAffineTransform(rotationAngle: -CGFloat(deg) * .pi / 180))
+            src = r.transformed(by: CGAffineTransform(translationX: -r.extent.minX, y: -r.extent.minY))
+        }
+        let img = FrameOps.cover(src, width, height)
         if let out = FrameOps.render(img, into: pool, width, height) { onFrame?(out) }
     }
 

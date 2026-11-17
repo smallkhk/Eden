@@ -57,6 +57,7 @@ final class LiveController: ObservableObject {
     var source: Source { get { Source(rawValue: sourceRaw) ?? .camera } set { sourceRaw = newValue.rawValue } }
     @Published var videoURL: URL?
     @Published var videoName = ""
+    @AppStorage("lc.videoRotation") var videoRotation = 0 { willSet { objectWillChange.send() } }
     private var videoPlayer: VideoFilePlayer?
 
     @AppStorage("lc.engine") var engineID = "lucy" { willSet { objectWillChange.send() } }
@@ -378,7 +379,7 @@ final class LiveController: ObservableObject {
         pip.setAspect(outputSize)
         hub.reset()
         AudioSessionSetup.activate()
-        let p = VideoFilePlayer(width: 720, height: 1280)
+        let p = VideoFilePlayer(width: 720, height: 1280, rotation: videoRotation)
         let hub = self.hub
         var gotFirst = false
         p.onFrame = { [weak self] pb in
@@ -395,6 +396,12 @@ final class LiveController: ObservableObject {
 
     private func stopVideoFile() {
         videoPlayer?.stop(); videoPlayer = nil
+    }
+
+    /// Rotate an uploaded video (for clips that come in sideways). Works live.
+    func rotateVideo() {
+        videoRotation = (videoRotation + 90) % 360
+        videoPlayer?.rotation = videoRotation
     }
 
     func setVideo(_ url: URL, name: String) {
