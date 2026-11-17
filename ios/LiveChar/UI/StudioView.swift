@@ -87,10 +87,19 @@ struct StudioView: View {
             .padding(12)
         }
         .overlay(alignment: .topTrailing) {
-            if live.hub.streamer != nil || (live.shareOn && live.running) {
-                Pill(text: live.shareProblem == nil ? "Link · \(live.viewers) watching" : "Link: slow", color: live.shareProblem == nil ? Theme.ok : Theme.bad)
-                    .padding(12)
+            VStack(alignment: .trailing, spacing: 6) {
+                if live.shareOn && (live.running || live.starting) {
+                    Pill(text: live.shareProblem == nil ? "Link · \(live.viewers) watching" : "Link: slow", color: live.shareProblem == nil ? Theme.ok : Theme.bad)
+                }
+                if live.running {
+                    switch live.hookClients {
+                    case .none: Pill(text: "Cam hook: feed failed", color: Theme.bad)
+                    case .some(0): Pill(text: "Cam hook · waiting", color: Theme.dim)
+                    case .some(let n): Pill(text: "Cam hook · \(n) app\(n == 1 ? "" : "s")", color: Theme.ok)
+                    }
+                }
             }
+            .padding(12)
         }
         .overlay(alignment: .bottomLeading) {
             if showInput && (live.running || live.starting) {

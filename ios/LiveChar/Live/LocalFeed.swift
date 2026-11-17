@@ -16,6 +16,13 @@ final class LocalFeed {
     private var gop: [Data] = []          // since the last keyframe, so a new viewer starts clean
     private var gopBytes = 0
 
+    /// main thread: how many hooked apps are reading the feed; nil = the feed could not start
+    var onClients: ((Int?) -> Void)?
+    private func report() {
+        let n = clients.values.filter { $0.ready }.count
+        DispatchQueue.main.async { self.onClients?(n) }
+    }
+
     private final class Client {
         let conn: NWConnection
         var ready = false
@@ -32,7 +39,7 @@ final class LocalFeed {
             guard let l = try? NWListener(using: params) else { return }
             l.newConnectionHandler = { [weak self] c in self?.accept(c) }
             l.stateUpdateHandler = { [weak self] st in
-                if case .failed = st { self?.queue.async { self?.listener?.cancel(); self?.listener = nil } }
+                if case .failed = st { self?.queue.async { self?.listener?.cancel(); self?.listener = nil; DispatchQueue.main.async { self?.onClients?(nil) } } }
             }
             l.start(queue: self.queue)
             self.listener = l
@@ -45,7 +52,7 @@ final class LocalFeed {
         clients[id] = client
         c.stateUpdateHandler = { [weak self] st in
             switch st {
-            case .failed, .cancelled: self?.queue.async { self?.clients[id] = nil }
+            case .failed, .cancelled: self?.queue.async { self?.clients[id] = nil; self?.report() }
             default: break
             }
         }
@@ -56,6 +63,7 @@ final class LocalFeed {
             let head = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
             c.send(content: Data(head.utf8), completion: .contentProcessed { _ in })
             client.ready = true
+            self.report()
             for p in self.gop { self.write(p, to: client) }
         }
     }

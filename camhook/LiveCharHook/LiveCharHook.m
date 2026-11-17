@@ -23,11 +23,11 @@
 #import <VideoToolbox/VideoToolbox.h>
 #import <CoreImage/CoreImage.h>
 #import <QuartzCore/QuartzCore.h>
+#import <Network/Network.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 
 static NSString *const kLinkKey = @"livechar.hooklink";
-static NSString *const kLocalFeed = @"http://127.0.0.1:8765/api/share/local/stream";
 
 // one decoded frame waiting to be shown at its timestamp
 @interface LCFrame : NSObject
@@ -70,6 +70,9 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
     double _delay;                 // playout buffer, adapts to the connection
     BOOL _usingLocal, _gotData;
     NSUInteger _attempt;
+    nw_connection_t _local;        // same-phone feed: raw TCP to 127.0.0.1 (not subject to ATS)
+    BOOL _headerDone;
+    dispatch_queue_t _netQ;
 }
 
 + (LCFeed *)shared {
@@ -84,6 +87,7 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
         _needKey = YES;
         _queue = [NSMutableArray array];
         _delay = 0.08;
+        _netQ = dispatch_queue_create("livechar.hook.net", DISPATCH_QUEUE_SERIAL);
         NSURLSessionConfiguration *c = [NSURLSessionConfiguration defaultSessionConfiguration];
         c.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
         c.timeoutIntervalForRequest = 30;
@@ -118,16 +122,76 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
         // same phone first; while LiveChar isn't serving here, alternate with the internet link
         BOOL local = !link || self.localFails < 2 || (_attempt % 2 == 0);
         _attempt++;
-        NSURL *url = local ? [NSURL URLWithString:kLocalFeed] : link;
         _usingLocal = local; _gotData = NO;
         _delay = local ? 0.08 : 0.25;
         _haveClock = NO;
         _running = YES;
         self.state = local ? @"waiting for LiveChar on this phone \u2026" : @"connecting to your live link\u2026";
+        if (local) { dispatch_async(_netQ, ^{ [self startLocal]; }); return; }
         _buf = [NSMutableData data];
-        _task = [_session dataTaskWithURL:url];
+        _task = [_session dataTaskWithURL:link];
         [_task resume];
     }
+}
+
+#pragma mark same-phone feed (raw TCP, so App Transport Security in the host app can't block it)
+
+- (void)startLocal {
+    _buf = [NSMutableData data];
+    _headerDone = NO;
+    nw_endpoint_t ep = nw_endpoint_create_host("127.0.0.1", "8765");
+    nw_parameters_t params = nw_parameters_create_secure_tcp(NW_PARAMETERS_DISABLE_PROTOCOL, NW_PARAMETERS_DEFAULT_CONFIGURATION);
+    nw_connection_t c = nw_connection_create(ep, params);
+    _local = c;
+    nw_connection_set_queue(c, _netQ);
+    __weak LCFeed *weakSelf = self;
+    nw_connection_set_state_changed_handler(c, ^(nw_connection_state_t st, nw_error_t err) {
+        LCFeed *me = weakSelf; if (!me) return;
+        if (st == nw_connection_state_ready) {
+            const char *req = "GET /api/share/local/stream HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+            dispatch_data_t d = dispatch_data_create(req, strlen(req), nil, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+            nw_connection_send(c, d, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT, true, ^(nw_error_t e) {});
+            me.state = @"this phone \u2014 press Go live in LiveChar";
+            [me receiveLocal:c];
+        } else if (st == nw_connection_state_waiting || st == nw_connection_state_failed) {
+            [me endLocal:c];          // nothing listening (LiveChar not live here)
+        } else if (st == nw_connection_state_cancelled) {
+            [me endLocal:c];
+        }
+    });
+    nw_connection_start(c);
+}
+
+- (void)receiveLocal:(nw_connection_t)c {
+    __weak LCFeed *weakSelf = self;
+    nw_connection_receive(c, 1, 1 << 18, ^(dispatch_data_t content, nw_content_context_t ctx, bool complete, nw_error_t err) {
+        LCFeed *me = weakSelf; if (!me || c != me->_local) return;
+        if (content) {
+            NSMutableData *chunk = [NSMutableData data];
+            dispatch_data_apply(content, ^bool(dispatch_data_t r, size_t off, const void *b, size_t n) { [chunk appendBytes:b length:n]; return true; });
+            if (!me->_headerDone) {
+                [me->_buf appendData:chunk];
+                NSRange end = [me->_buf rangeOfData:[@"\r\n\r\n" dataUsingEncoding:NSASCIIStringEncoding] options:0 range:NSMakeRange(0, me->_buf.length)];
+                if (end.location == NSNotFound) { [me receiveLocal:c]; return; }
+                NSData *rest = [me->_buf subdataWithRange:NSMakeRange(NSMaxRange(end), me->_buf.length - NSMaxRange(end))];
+                me->_buf = [NSMutableData data];
+                me->_headerDone = YES;
+                me.localFails = 0;
+                if (rest.length) [me ingest:rest];
+            } else {
+                [me ingest:chunk];
+            }
+        }
+        if (complete || err) { [me endLocal:c]; return; }
+        [me receiveLocal:c];
+    });
+}
+
+- (void)endLocal:(nw_connection_t)c {
+    if (c != _local) return;
+    _local = nil;
+    nw_connection_cancel(c);
+    [self streamEnded];
 }
 
 - (void)URLSession:(NSURLSession *)s dataTask:(NSURLSessionDataTask *)t
@@ -141,6 +205,10 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
 }
 
 - (void)URLSession:(NSURLSession *)s dataTask:(NSURLSessionDataTask *)t didReceiveData:(NSData *)data {
+    [self ingest:data];
+}
+
+- (void)ingest:(NSData *)data {
     _gotData = YES;
     [_buf appendData:data];
     const uint8_t *b = _buf.bytes;
@@ -155,6 +223,10 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
 }
 
 - (void)URLSession:(NSURLSession *)s task:(NSURLSessionTask *)t didCompleteWithError:(NSError *)e {
+    [self streamEnded];
+}
+
+- (void)streamEnded {
     @synchronized (self) { _running = NO; }
     if (_usingLocal && !_gotData) self.localFails++;
     [self dropDecoder]; _needKey = YES; _sps = nil; _pps = nil;
@@ -428,8 +500,10 @@ static void LCEnsureLink(void) {
     static BOOL asking = NO;
     [LCFeed.shared ensureRunning];   // same-phone feed needs no link
     if ([[NSUserDefaults standardUserDefaults] stringForKey:kLinkKey].length > 0) return;
-    if (LCFeed.shared.localFails < 3) return;     // give LiveChar on this phone a chance first
+    static BOOL askedOnce = NO;
+    if (LCFeed.shared.localFails < 30 || askedOnce) return;   // ~30 s without LiveChar here; ask once per launch
     if (asking) return;
+    askedOnce = YES;
     asking = YES;
     dispatch_async(dispatch_get_main_queue(), ^{
         UIViewController *top = LCTopVC();

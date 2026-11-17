@@ -94,6 +94,8 @@ final class LiveController: ObservableObject {
     @Published var recording = false
     @Published var recordStart = Date()
     @Published var viewers = 0
+    /// apps on this phone using LiveChar as their camera (the dylib hook); nil = local feed failed
+    @Published var hookClients: Int? = 0
     @Published var shareProblem: String?
     @Published var pipActive = false
 
@@ -457,6 +459,7 @@ final class LiveController: ObservableObject {
 
     private func startShare() {
         if let s = hub.streamer { s.upload = shareOn; return }
+        LocalFeed.shared.onClients = { [weak self] n in Task { @MainActor in self?.hookClients = n } }
         let s = ShareStreamer(upload: shareOn)
         s.onViewers = { [weak self] n in Task { @MainActor in self?.viewers = n } }
         s.onProblem = { [weak self] p in Task { @MainActor in self?.shareProblem = p } }
