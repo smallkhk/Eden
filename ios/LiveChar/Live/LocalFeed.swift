@@ -79,9 +79,12 @@ final class LocalFeed {
     /// One framed packet (length prefix included). Called from the encoder queue.
     func send(_ packet: Data, isKey: Bool) {
         queue.async {
-            if isKey { self.gop.removeAll(); self.gopBytes = 0 }
-            if self.gopBytes + packet.count <= 6_000_000 { self.gop.append(packet); self.gopBytes += packet.count }
-            for c in self.clients.values where c.ready { self.write(packet, to: c) }
+            let isAudio = packet.count > 4 && (packet[4] & 4) != 0   // flags byte after the u32 length
+            if !isAudio {
+                if isKey { self.gop.removeAll(); self.gopBytes = 0 }   // video: keep since the last keyframe for late joiners
+                if self.gopBytes + packet.count <= 6_000_000 { self.gop.append(packet); self.gopBytes += packet.count }
+            }
+            for c in self.clients.values where c.ready { self.write(packet, to: c) }   // audio goes live only
         }
     }
 
