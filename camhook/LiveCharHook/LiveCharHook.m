@@ -4,8 +4,11 @@
 //   * Hooks AVCaptureVideoDataOutput's frame delegate: apps that read camera frames get LiveChar frames.
 //   * Overlays an AVSampleBufferDisplayLayer on every AVCaptureVideoPreviewLayer: the on-screen preview
 //     shows LiveChar (this is what Cam Test shows).
-//   * On the first camera use, asks for the watch link and remembers it (host app's NSUserDefaults,
-//     key "livechar.hooklink"; or a Documents/livechar.txt file).
+//   * Same phone first: reads LiveChar's local feed at http://127.0.0.1:8765 (no internet, ~instant).
+//     Falls back to the watch link (asked once, remembered in the host app's NSUserDefaults key
+//     "livechar.hooklink", or a Documents/livechar.txt file) when LiveChar is not running on this phone.
+//   * Frames are played out on their own timestamps through a small buffer, so the picture moves
+//     evenly instead of skipping/freezing when frames arrive in bursts.
 //
 // Video only (no voice): a camera has no audio. Built unsigned; eSign signs it when it injects.
 //
@@ -24,6 +27,16 @@
 #import <objc/message.h>
 
 static NSString *const kLinkKey = @"livechar.hooklink";
+static NSString *const kLocalFeed = @"http://127.0.0.1:8765/api/share/local/stream";
+
+// one decoded frame waiting to be shown at its timestamp
+@interface LCFrame : NSObject
+@property (nonatomic) CVPixelBufferRef px;
+@property (nonatomic) double pts;
+@end
+@implementation LCFrame
+- (void)dealloc { if (_px) CVPixelBufferRelease(_px); }
+@end
 
 #pragma mark - feed (download + H.264 decode -> latest CVPixelBuffer)
 
@@ -33,6 +46,7 @@ static NSString *const kLinkKey = @"livechar.hooklink";
 - (CVPixelBufferRef)copyLatest CF_RETURNS_RETAINED;   // nil if nothing decoded yet
 - (CVPixelBufferRef)copyLatestSeq:(uint64_t *)seq CF_RETURNS_RETAINED;
 @property (atomic, copy) NSString *state;
+@property (atomic) NSInteger localFails;   // consecutive failed tries of the same-phone feed
 @end
 
 static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfoFlags flags,
@@ -47,9 +61,15 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
     CMVideoFormatDescriptionRef _format;
     VTDecompressionSessionRef _decoder;
     BOOL _needKey;
-    CVPixelBufferRef _latest;
+    CVPixelBufferRef _latest;      // frame on screen now
     uint64_t _seq;
     NSLock *_lock;
+    NSMutableArray<LCFrame *> *_queue;   // decoded, waiting for their time
+    double _offset;                // host time - media time (+ delay)
+    BOOL _haveClock;
+    double _delay;                 // playout buffer, adapts to the connection
+    BOOL _usingLocal, _gotData;
+    NSUInteger _attempt;
 }
 
 + (LCFeed *)shared {
@@ -62,6 +82,8 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
     if ((self = [super init])) {
         _lock = [NSLock new];
         _needKey = YES;
+        _queue = [NSMutableArray array];
+        _delay = 0.08;
         NSURLSessionConfiguration *c = [NSURLSessionConfiguration defaultSessionConfiguration];
         c.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
         c.timeoutIntervalForRequest = 30;
@@ -70,7 +92,7 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
     return self;
 }
 
-- (NSURL *)streamURL {
+- (NSURL *)linkURL {
     NSString *link = [[NSUserDefaults standardUserDefaults] stringForKey:kLinkKey];
     if (link.length == 0) {
         NSString *file = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/livechar.txt"];
@@ -92,10 +114,16 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
 - (void)ensureRunning {
     @synchronized (self) {
         if (_running) return;
-        NSURL *url = [self streamURL];
-        if (!url) { self.state = @"paste your live link"; return; }
+        NSURL *link = [self linkURL];
+        // same phone first; while LiveChar isn't serving here, alternate with the internet link
+        BOOL local = !link || self.localFails < 2 || (_attempt % 2 == 0);
+        _attempt++;
+        NSURL *url = local ? [NSURL URLWithString:kLocalFeed] : link;
+        _usingLocal = local; _gotData = NO;
+        _delay = local ? 0.08 : 0.25;
+        _haveClock = NO;
         _running = YES;
-        self.state = @"connecting\u2026";
+        self.state = local ? @"waiting for LiveChar on this phone \u2026" : @"connecting to your live link\u2026";
         _buf = [NSMutableData data];
         _task = [_session dataTaskWithURL:url];
         [_task resume];
@@ -106,13 +134,14 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
                                      didReceiveResponse:(NSURLResponse *)resp
                                       completionHandler:(void (^)(NSURLSessionResponseDisposition))done {
     NSInteger code = [resp isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)resp).statusCode : 0;
-    if (code == 200) self.state = @"connected \u2014 waiting for LiveChar";
+    if (code == 200) { self.state = _usingLocal ? @"this phone \u2014 press Go live in LiveChar" : @"live link \u2014 waiting for LiveChar"; if (_usingLocal) self.localFails = 0; }
     else if (code == 404) self.state = @"link not found (update server / reset link)";
     else self.state = [NSString stringWithFormat:@"server error %ld", (long)code];
     done(code == 200 ? NSURLSessionResponseAllow : NSURLSessionResponseCancel);
 }
 
 - (void)URLSession:(NSURLSession *)s dataTask:(NSURLSessionDataTask *)t didReceiveData:(NSData *)data {
+    _gotData = YES;
     [_buf appendData:data];
     const uint8_t *b = _buf.bytes;
     NSUInteger n = _buf.length, o = 0;
@@ -127,8 +156,10 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
 
 - (void)URLSession:(NSURLSession *)s task:(NSURLSessionTask *)t didCompleteWithError:(NSError *)e {
     @synchronized (self) { _running = NO; }
-    self.state = @"reconnecting\u2026";
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_global_queue(0, 0), ^{
+    if (_usingLocal && !_gotData) self.localFails++;
+    [self dropDecoder]; _needKey = YES; _sps = nil; _pps = nil;
+    self.state = (_usingLocal && ![self linkURL]) ? @"open LiveChar on this phone and press Go live" : @"reconnecting\u2026";
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_global_queue(0, 0), ^{
         [self ensureRunning];
     });
 }
@@ -138,6 +169,8 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
     if (flags & 2) { _needKey = YES; return; }   // stream ended
     if (flags & 4) return;                        // audio — a camera has no sound
     BOOL key = (flags & 1) != 0;
+    uint64_t tsus = 0;
+    for (int i = 0; i < 8; i++) tsus = (tsus << 8) | p[1 + i];
     const uint8_t *data = p + 9;
     NSUInteger dlen = len - 9;
     // split Annex B into NAL units
@@ -166,7 +199,8 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
     CMBlockBufferReplaceDataBytes(avcc.bytes, block, 0, avcc.length);
     CMSampleBufferRef sb = NULL;
     size_t sizes[1] = { avcc.length };
-    if (CMSampleBufferCreateReady(NULL, block, _format, 1, 0, NULL, 1, sizes, &sb) == noErr && sb) {
+    CMSampleTimingInfo timing = { kCMTimeInvalid, CMTimeMake((int64_t)tsus, 1000000), kCMTimeInvalid };
+    if (CMSampleBufferCreateReady(NULL, block, _format, 1, 1, &timing, 1, sizes, &sb) == noErr && sb) {
         VTDecompressionSessionDecodeFrame(_decoder, sb, kVTDecodeFrame_EnableAsynchronousDecompression, NULL, NULL);
         CFRelease(sb);
     }
@@ -202,23 +236,46 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
     }
 }
 
-- (void)storeFrame:(CVImageBufferRef)image {
+- (void)storeFrame:(CVImageBufferRef)image pts:(CMTime)pts {
     if (!image) return;
     CVPixelBufferRef px = (CVPixelBufferRef)image;
-    self.state = [NSString stringWithFormat:@"live %zu\u00d7%zu", CVPixelBufferGetWidth(px), CVPixelBufferGetHeight(px)];
-    CVPixelBufferRetain(px);
+    self.state = [NSString stringWithFormat:@"live %zu\u00d7%zu%@", CVPixelBufferGetWidth(px), CVPixelBufferGetHeight(px), _usingLocal ? @" \u00b7 this phone" : @""];
+    LCFrame *f = [LCFrame new];
+    f.px = CVPixelBufferRetain(px);
+    f.pts = CMTIME_IS_VALID(pts) ? CMTimeGetSeconds(pts) : CACurrentMediaTime();
     [_lock lock];
-    CVPixelBufferRef old = _latest; _latest = px; _seq++;
+    if (_queue.count && f.pts + 0.5 < _queue.lastObject.pts) { [_queue removeAllObjects]; _haveClock = NO; }   // stream restarted
+    [_queue addObject:f];
+    while (_queue.count > 20) [_queue removeObjectAtIndex:0];
     [_lock unlock];
-    if (old) CVPixelBufferRelease(old);
 }
 
 - (CVPixelBufferRef)copyLatest {
     return [self copyLatestSeq:NULL];
 }
 
+// The frame whose time has come: frames are shown on their own timestamps, `_delay` behind real time.
 - (CVPixelBufferRef)copyLatestSeq:(uint64_t *)seq {
+    double now = CACurrentMediaTime();
     [_lock lock];
+    if (_queue.count) {
+        if (!_haveClock) { _offset = now - _queue.firstObject.pts + _delay; _haveClock = YES; }
+        double t = now - _offset;                       // media time to show now
+        double newest = _queue.lastObject.pts;
+        if (newest - t > _delay + 0.4) {                 // fell far behind (stall): jump to live
+            _offset = now - newest + _delay; t = now - _offset;
+        }
+        LCFrame *pick = nil;
+        while (_queue.count && _queue.firstObject.pts <= t) { pick = _queue.firstObject; [_queue removeObjectAtIndex:0]; }
+        if (pick) {
+            CVPixelBufferRef old = _latest; _latest = CVPixelBufferRetain(pick.px); _seq++;
+            if (old) CVPixelBufferRelease(old);
+        }
+    } else if (_haveClock && _latest && now - _offset > 0) {
+        // ran dry: wait a little longer next time (smoother, slightly more delay), up to 0.5 s
+        static double lastGrow = 0;
+        if (now - lastGrow > 1.0 && _delay < 0.5) { _delay += 0.04; _offset += 0.04; lastGrow = now; }
+    }
     CVPixelBufferRef px = _latest ? (CVPixelBufferRef)CVPixelBufferRetain(_latest) : NULL;
     if (seq) *seq = _seq;
     [_lock unlock];
@@ -229,7 +286,7 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
 
 static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfoFlags flags,
                        CVImageBufferRef image, CMTime pts, CMTime dur) {
-    if (status == noErr && image) [(__bridge LCFeed *)outRef storeFrame:image];
+    if (status == noErr && image) [(__bridge LCFeed *)outRef storeFrame:image pts:pts];
 }
 
 #pragma mark - format conversion (match what the host app asked the camera for)
@@ -369,14 +426,16 @@ static UIViewController *LCTopVC(void) {
 // Ask for the watch link once, then start the feed.
 static void LCEnsureLink(void) {
     static BOOL asking = NO;
-    if ([[NSUserDefaults standardUserDefaults] stringForKey:kLinkKey].length > 0) { [LCFeed.shared ensureRunning]; return; }
+    [LCFeed.shared ensureRunning];   // same-phone feed needs no link
+    if ([[NSUserDefaults standardUserDefaults] stringForKey:kLinkKey].length > 0) return;
+    if (LCFeed.shared.localFails < 3) return;     // give LiveChar on this phone a chance first
     if (asking) return;
     asking = YES;
     dispatch_async(dispatch_get_main_queue(), ^{
         UIViewController *top = LCTopVC();
         if (!top) { asking = NO; return; }
         UIAlertController *a = [UIAlertController alertControllerWithTitle:@"LiveChar camera"
-            message:@"Paste your LiveChar live link (from the app: Account → Live link). Turn on “Share live to my link” there." preferredStyle:UIAlertControllerStyleAlert];
+            message:@"LiveChar isn't live on this phone. Open LiveChar and press Go live (keep PiP on) \u2014 or paste your live link to use LiveChar from another device." preferredStyle:UIAlertControllerStyleAlert];
         [a addTextFieldWithConfigurationHandler:^(UITextField *f) {
             f.placeholder = @"https://…/watch/…"; f.keyboardType = UIKeyboardTypeURL;
             f.autocapitalizationType = UITextAutocapitalizationTypeNone; f.autocorrectionType = UITextAutocorrectionTypeNo;

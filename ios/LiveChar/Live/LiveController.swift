@@ -192,7 +192,7 @@ final class LiveController: ObservableObject {
             if voiceOn && !voiceID.isEmpty { await startVoice() } else { AudioSessionSetup.activate() }
             try await camera.start(position: backCamera ? .back : .front)
             pip.setEnabled(true)
-            if shareOn { startShare() }
+            startShare()   // same-phone camera feed always; internet link only if shareOn
 
             let events = makeEvents()
             switch def.kind {
@@ -387,7 +387,7 @@ final class LiveController: ObservableObject {
         videoPlayer = p
         p.start(url: url)
         pip.setEnabled(true)
-        if shareOn { startShare() }
+        startShare()
         running = true; starting = false
     }
 
@@ -450,12 +450,14 @@ final class LiveController: ObservableObject {
 
     func setShare(_ on: Bool) {
         shareOn = on
-        if running || starting { on ? startShare() : stopShare() }
+        if running || starting {
+            if let s = hub.streamer { s.upload = on; if !on { viewers = 0; shareProblem = nil } } else { startShare() }
+        }
     }
 
     private func startShare() {
-        guard hub.streamer == nil else { return }
-        let s = ShareStreamer()
+        if let s = hub.streamer { s.upload = shareOn; return }
+        let s = ShareStreamer(upload: shareOn)
         s.onViewers = { [weak self] n in Task { @MainActor in self?.viewers = n } }
         s.onProblem = { [weak self] p in Task { @MainActor in self?.shareProblem = p } }
         hub.streamer = s
