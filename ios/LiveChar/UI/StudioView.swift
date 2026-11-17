@@ -224,6 +224,8 @@ struct StudioView: View {
                 .tint(Theme.ok)
             }
 
+            if live.engineDef.kind == .edenGpu, app.user?.isAdmin == true { GpuControlCard() }
+
             if vClass == .compact { goButtons.padding(.top, 4) }
         }
     }
