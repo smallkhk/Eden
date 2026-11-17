@@ -1,6 +1,6 @@
 // LiveChar — live AI character changer
 // Accounts + per-second balance + admin panel.
-// Engines: Decart Lucy (direct) + VAST Eden Live 14B / 5B (fal.ai)
+// Engines: Decart Lucy (direct) + VAST Eden Live 14B / 5B (fal.ai) + Eden 5B on your own RunPod GPU
 import express from "express";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -12,6 +12,7 @@ import falProxy from "@fal-ai/server-proxy";
 import QRCode from "qrcode";
 import nodemailer from "nodemailer";
 import { NETWORKS, findTransfer, toUnits, isBscAddress, isTronAddress, isTxid } from "./lib/chain.js";
+import { setupGpu } from "./lib/gpu.js";
 
 try { process.loadEnvFile(); } catch { /* no .env file */ }
 
@@ -77,6 +78,12 @@ const DEFAULTS = {
   lucy_model: "lucy-latest", first_frame_model: "fal-ai/flux-2/klein/9b/edit",
   usdt_bsc_address: "", usdt_tron_address: "", tron_api_key: "",
   smtp_host: "", smtp_port: "587", smtp_user: "", smtp_pass: "", smtp_from: "", site_url: "",
+  // own GPU (RunPod)
+  runpod_key: "", rate_eden_gpu: "1", gpu_idle_minutes: "15", gpu_volume_gb: "100",
+  gpu_type: "NVIDIA GeForce RTX 5090", gpu_datacenter: "EU-RO-1", gpu_cloud: "SECURE",
+  gpu_image: "lightx2v/lightx2v:26062001-cu130-5090-fix-260921",
+  gpu_code_url: "https://raw.githubusercontent.com/smallkhk/Eden/main/gpu",
+  gpu_secret: "", gpu_volume_id: "", gpu_pod_id: "",
 };
 const realKey = (v) => (v && !/^YOUR_/i.test(v) ? v : "");
 function setting(key) {
@@ -95,6 +102,7 @@ const ENGINES = {
   lucy:       { rate: () => num("rate_lucy"), provider: "decart" },
   "eden-5b":  { rate: () => num("rate_eden_5b"),  provider: "fal", endpoint: "vast/eden-live-5b-video" },
   "eden-14b": { rate: () => num("rate_eden_14b"), provider: "fal", endpoint: "vast/eden-live-14b-video" },
+  "eden-gpu": { rate: () => num("rate_eden_gpu"), provider: "gpu" },
 };
 
 // ---------- auth ----------
@@ -132,6 +140,14 @@ const requireUser = (req, res, next) => {
 };
 const requireAdmin = (req, res, next) =>
   requireUser(req, res, () => (req.user.is_admin ? next() : res.status(403).json({ error: "Admin only" })));
+
+// own GPU (RunPod) — see lib/gpu.js and gpu/
+const gpu = setupGpu({
+  app, setting, setSetting, num, requireUser, requireAdmin,
+  openSession: (userId) => openSession(userId),
+  anyGpuSession: () => !!q("SELECT 1 FROM sessions WHERE engine = 'eden-gpu' AND ended_at IS NULL LIMIT 1").get(),
+  isGpuEngine: (engine) => ENGINES[engine]?.provider === "gpu",
+});
 
 // small in-memory limiter for login / register
 const hits = new Map();
@@ -197,9 +213,9 @@ app.get("/api/config", (req, res) => {
     allowSignup: setting("allow_signup") === "1",
     maxSessionSeconds: num("max_session_seconds"),
     lucyModel: setting("lucy_model"), lucyFast: setting("lucy_fast") === "1",
-    engines: { lucy: !!setting("decart_key"), eden: !!setting("fal_key"), voice: !!setting("elevenlabs_key") },
+    engines: { lucy: !!setting("decart_key"), eden: !!setting("fal_key"), voice: !!setting("elevenlabs_key"), gpu: gpu.status().ready, gpuStage: gpu.status().state },
     canReset: !!setting("smtp_host"),
-    rates: { lucy: num("rate_lucy"), "eden-5b": num("rate_eden_5b"), "eden-14b": num("rate_eden_14b"), firstFrame: num("first_frame_fee"), voice: num("rate_voice") },
+    rates: { lucy: num("rate_lucy"), "eden-5b": num("rate_eden_5b"), "eden-14b": num("rate_eden_14b"), "eden-gpu": num("rate_eden_gpu"), firstFrame: num("first_frame_fee"), voice: num("rate_voice") },
   });
 });
 
@@ -259,7 +275,8 @@ app.post("/api/session/start", requireUser, (req, res) => {
   const engine = String(req.body?.engine || "");
   const def = ENGINES[engine];
   if (!def) return res.status(400).json({ error: "Unknown engine" });
-  if (!setting(def.provider === "fal" ? "fal_key" : "decart_key")) return res.status(503).json({ error: "This engine is not set up yet" });
+  if (def.provider === "gpu") { if (!gpu.status().ready) return res.status(503).json({ error: "The GPU is off. Ask the admin to start it." }); }
+  else if (!setting(def.provider === "fal" ? "fal_key" : "decart_key")) return res.status(503).json({ error: "This engine is not set up yet" });
 
   const old = openSession(req.user.id);
   if (old) settle(old, now(), true);
@@ -342,7 +359,8 @@ app.all(["/api/fal/proxy", "/api/fal/proxy/*"], async (req, res) => {
 const isImg = (s) => typeof s === "string" && /^data:image\/(jpeg|png|webp);base64,/.test(s);
 app.post("/api/first-frame", requireUser, async (req, res) => {
   const s = openSession(req.user.id);
-  if (!s || ENGINES[s.engine]?.provider !== "fal") return res.status(403).json({ error: "No active Eden session" });
+  if (!s || !["fal", "gpu"].includes(ENGINES[s.engine]?.provider)) return res.status(403).json({ error: "No active Eden session" });
+  if (!setting("fal_key")) return res.status(503).json({ error: "No fal key for the character frame" });
   const { frame, character, prompt = "", width = 832, height = 480 } = req.body || {};
   if (!isImg(frame) || !isImg(character)) return res.status(400).json({ error: "frame and character must be image data URIs" });
   const fee = Math.max(0, num("first_frame_fee"));
@@ -588,16 +606,16 @@ app.delete("/api/characters/:id", requireUser, (req, res) => {
 });
 
 // ---------- admin ----------
-const NUMERIC = ["rate_voice", "rate_lucy", "rate_eden_5b", "rate_eden_14b", "first_frame_fee", "max_session_seconds", "signup_bonus"];
+const NUMERIC = ["rate_voice", "rate_lucy", "rate_eden_5b", "rate_eden_14b", "rate_eden_gpu", "gpu_idle_minutes", "first_frame_fee", "max_session_seconds", "signup_bonus"];
 const mask = (v) => (v ? `••••${v.slice(-4)}` : "");
 const TEXT_KEYS = ["usdt_bsc_address", "usdt_tron_address", "smtp_host", "smtp_port", "smtp_user", "smtp_from", "site_url"];
-const SECRET_KEYS = ["fal_key", "decart_key", "elevenlabs_key", "tron_api_key", "smtp_pass"];
+const SECRET_KEYS = ["fal_key", "decart_key", "elevenlabs_key", "tron_api_key", "smtp_pass", "runpod_key"];
 
 app.get("/api/admin/settings", requireAdmin, (_req, res) => {
   const out = { fal_key_hint: mask(setting("fal_key")), decart_key_hint: mask(setting("decart_key")), elevenlabs_key_hint: mask(setting("elevenlabs_key")), allow_signup: setting("allow_signup") === "1", lucy_fast: setting("lucy_fast") === "1", lucy_model: setting("lucy_model") };
   for (const k of NUMERIC) out[k] = num(k);
   for (const k of TEXT_KEYS) out[k] = setting(k);
-  out.tron_api_key_hint = mask(setting("tron_api_key")); out.smtp_pass_hint = mask(setting("smtp_pass"));
+  out.tron_api_key_hint = mask(setting("tron_api_key")); out.smtp_pass_hint = mask(setting("smtp_pass")); out.runpod_key_hint = mask(setting("runpod_key"));
   res.json(out);
 });
 app.post("/api/admin/settings", requireAdmin, (req, res) => {
