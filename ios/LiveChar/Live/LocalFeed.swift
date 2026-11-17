@@ -5,7 +5,7 @@ import Network
 /// http://127.0.0.1:8765/api/share/<anything>/stream in the same framing as the server's live link
 /// ([u32 length][flags][u64 µs timestamp][H.264 Annex B]). Loopback only — nothing leaves the phone,
 /// so the hooked app gets every frame right away, in order, with no internet in between.
-/// Keeps running while LiveChar runs (in the background that means PiP on).
+/// Keeps running while LiveChar runs (in the background that means PiP on, so iOS keeps the app alive).
 final class LocalFeed {
     static let shared = LocalFeed()
     static let port: UInt16 = 8765
