@@ -29,11 +29,11 @@ final class FileAudioTap {
                 guard MTAudioProcessingTapGetSourceAudio(tap, frames, bufferList, flagsOut, nil, framesOut) == noErr else { return }
                 me.process(bufferList, frames: Int(framesOut.pointee))
             })
-        var tap: Unmanaged<MTAudioProcessingTap>?
+        var tap: MTAudioProcessingTap?
         guard MTAudioProcessingTapCreate(kCFAllocatorDefault, &callbacks, kMTAudioProcessingTapCreationFlag_PostEffects, &tap) == noErr,
               let tap else { return }
         let params = AVMutableAudioMixInputParameters(track: track)
-        params.audioTapProcessor = tap.takeRetainedValue()
+        params.audioTapProcessor = tap
         let mix = AVMutableAudioMix()
         mix.inputParameters = [params]
         item.audioMix = mix
