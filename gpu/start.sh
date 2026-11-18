@@ -57,7 +57,7 @@ fi
 
 # Light mode: small RunPod base image. Put the full image's folders back at their original
 # paths (symlinks into the volume) so every hard-coded path keeps working.
-if ! python3 -c "import torch" 2>/dev/null && [[ -f "$LC/env/.done" && -f "$LC/env/cuda/.done" && -f "$LC/env/.v3" ]]; then
+if ! python3 -c "import torch" 2>/dev/null && [[ -f "$LC/env/.done" && -f "$LC/env/cuda/.done" && -f "$LC/env/.v3" && -f "$LC/env/.v4" ]]; then
   export LC_LIGHT=1
   PY312=$(command -v python3.12 || true)
   if [[ -z "$PY312" ]]; then stage "load failed: light image has no python3.12"; wait $STATUS_PID; exit 1; fi
@@ -72,10 +72,16 @@ if ! python3 -c "import torch" 2>/dev/null && [[ -f "$LC/env/.done" && -f "$LC/e
   export CUDA_HOME=/usr/local/cuda CUDA_PATH=/usr/local/cuda
   export PATH="/tmp/lcbin:/usr/local/cuda/bin:$LC/env/bin:$PATH"
   export LD_LIBRARY_PATH="/usr/local/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:$LC/env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$LC/env/syslib"
   export LIBRARY_PATH="/usr/local/cuda/lib64/stubs"
   ldconfig 2>/dev/null || true
-  python3 -c "import torch, sageattention; print('>>> light image ok: torch', torch.__version__, 'cuda', torch.cuda.is_available())" \
-    || { stage "load failed: light image could not import torch/sageattention"; wait $STATUS_PID; exit 1; }
+  ERR=$(cd "$LC/app" && python3 -c "
+import torch, sageattention, av, aiohttp, aiortc, numpy, PIL, lightx2v
+from aiortc.codecs import h264, vp8
+import eden_server
+print('ok', torch.__version__, torch.cuda.is_available())" 2>&1 | tail -1)
+  echo ">>> light self-test: $ERR"
+  if [[ "$ERR" != ok* ]]; then stage "load failed: light image: ${ERR//\"/\'}"; wait $STATUS_PID; exit 1; fi
 fi
 
 # Housekeeping: drop caches and leftovers that are not needed once setup is done.
@@ -128,6 +134,19 @@ fi
     date > "$LC/env/.v3" && echo ">>> kernels saved ($(du -sh "$LC/env/app" | cut -f1)); volume: $(df -h /workspace | tail -1 | awk '{print $3"/"$2}')" \
     || echo "warn: kernel copy failed (volume full?) - will keep using the full image"
   fi
+  # v4: system libraries that compiled packages link to (libvpx, opus, srtp, ffmpeg...).
+  # ldd every .so in the saved env and keep anything that is not core glibc.
+  if [[ -f "$LC/env/.v3" && ! -f "$LC/env/.v4" ]]; then
+    stage "saving system libraries to volume (one time)"
+    mkdir -p "$LC/env/syslib"
+    find "$LC/env/site" "$LC/env/app" -name '*.so*' -type f 2>/dev/null \
+      | xargs -r -P 8 -n 50 ldd 2>/dev/null | awk '/=> \//{print $3}' | sort -u \
+      | grep -E '^/(usr/)?lib/x86_64-linux-gnu/' \
+      | grep -vE '/(libc|libm|libpthread|libdl|librt|ld-linux-x86-64|libstdc\+\+|libgcc_s|libresolv|libutil)\.so' \
+      | while read -r lib; do cp -nL "$lib" "$LC/env/syslib/" 2>/dev/null; done
+    date > "$LC/env/.v4" && echo ">>> system libs saved: $(ls "$LC/env/syslib" | wc -l) files, $(du -sh "$LC/env/syslib" | cut -f1)"
+  fi
+
 fi
 
 # 4. TURN relay: browsers reach the pod's WebRTC through TCP 3478.
@@ -146,9 +165,10 @@ turnserver --listening-port 3478 --listening-ip "$PRIV_IP" --relay-ip "$PRIV_IP"
 stage "loading Eden 5B"
 kill $STATUS_PID 2>/dev/null; wait $STATUS_PID 2>/dev/null
 cd "$LC/app"
-python3 eden_server.py
-# The server only exits on a crash: keep reporting it so the app stops the pod instead of billing.
-stage "load failed: model server exited (code $?)"
+python3 eden_server.py 2>&1 | tee "$LC/logs/server.log"
+# The server only exits on a crash: report the last error line so the app shows it and stops the pod.
+LAST=$(grep -E "Error|error|Exception" "$LC/logs/server.log" | tail -1 | cut -c1-240)
+stage "load failed: model server crashed: ${LAST//\"/\'}"
 python3 - <<'PY'
 import http.server, os
 LC = os.environ["LC"]
