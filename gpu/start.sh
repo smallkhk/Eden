@@ -78,6 +78,12 @@ if ! python3 -c "import torch" 2>/dev/null && [[ -f "$LC/env/.done" && -f "$LC/e
     || { stage "load failed: light image could not import torch/sageattention"; wait $STATUS_PID; exit 1; }
 fi
 
+# Housekeeping: drop caches and leftovers that are not needed once setup is done.
+if [[ -f "$LC/setup.done" ]]; then
+  rm -rf "$LC/pip-cache" "$LC/hf-home" "$LC/cutlass" "$LC/env/extra" "$LC/models/EdenLive" 2>/dev/null
+  find "$LC/logs" -name '*.log' -size +20M -delete 2>/dev/null
+fi
+
 # 3. Python packages for this boot (container disk is wiped on every stop).
 stage "installing packages"
 if [[ -z "${LC_LIGHT:-}" ]]; then
