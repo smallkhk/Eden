@@ -57,7 +57,7 @@ fi
 
 # Light mode: small RunPod base image. Put the full image's folders back at their original
 # paths (symlinks into the volume) so every hard-coded path keeps working.
-if ! python3 -c "import torch" 2>/dev/null && [[ -f "$LC/env/.done" && -f "$LC/env/cuda/.done" && -f "$LC/env/.v3" && -f "$LC/env/.v4" ]]; then
+if ! python3 -c "import torch" 2>/dev/null && [[ -f "$LC/env/.done" && -f "$LC/env/cuda/.done" && -f "$LC/env/.v3" ]]; then
   export LC_LIGHT=1
   PY312=$(command -v python3.12 || true)
   if [[ -z "$PY312" ]]; then stage "load failed: light image has no python3.12"; wait $STATUS_PID; exit 1; fi
@@ -75,11 +75,29 @@ if ! python3 -c "import torch" 2>/dev/null && [[ -f "$LC/env/.done" && -f "$LC/e
   export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$LC/env/syslib"
   export LIBRARY_PATH="/usr/local/cuda/lib64/stubs"
   ldconfig 2>/dev/null || true
-  ERR=$(cd "$LC/app" && python3 -c "
+  # Self-test the full server import. If a system library is missing, find the Ubuntu package
+  # that ships it (apt-file), install it (debs cached on the volume) and remember it for next boot.
+  APTDIR="$LC/apt"; APTPK="$LC/env/light-apt.txt"; mkdir -p "$APTDIR"; touch "$APTPK"
+  apt_q() { DEBIAN_FRONTEND=noninteractive apt-get -o Dir::Cache::archives="$APTDIR" -y -qq --no-install-recommends "$@" >/dev/null 2>&1; }
+  if [[ -s "$APTPK" ]]; then stage "installing saved system libraries"; apt_q update; apt_q install $(sort -u "$APTPK"); fi
+  selftest() { (cd "$LC/app" && python3 -c "
 import torch, sageattention, av, aiohttp, aiortc, numpy, PIL, lightx2v
 from aiortc.codecs import h264, vp8
 import eden_server
-print('ok', torch.__version__, torch.cuda.is_available())" 2>&1 | tail -1)
+print('ok', torch.__version__, torch.cuda.is_available())" 2>&1 | tail -1); }
+  ERR=$(selftest); tries=0
+  while [[ "$ERR" != ok* && $tries -lt 8 ]]; do
+    tries=$((tries + 1))
+    LIB=$(echo "$ERR" | grep -oE 'lib[A-Za-z0-9_+.-]+\.so[.0-9]*' | head -1)
+    [[ -z "$LIB" ]] && break
+    stage "light image: installing $LIB"
+    if ! command -v apt-file >/dev/null; then apt_q update; apt_q install apt-file; apt-file update >/dev/null 2>&1; fi
+    PKG=$(apt-file search -l "/$LIB" 2>/dev/null | grep -vE -- '-dev$|-dbg$' | head -1)
+    [[ -z "$PKG" ]] && break
+    apt_q install "$PKG" && echo "$PKG" >> "$APTPK"
+    ldconfig 2>/dev/null || true
+    ERR=$(selftest)
+  done
   echo ">>> light self-test: $ERR"
   if [[ "$ERR" != ok* ]]; then stage "load failed: light image: ${ERR//\"/\'}"; wait $STATUS_PID; exit 1; fi
 fi
@@ -90,6 +108,10 @@ if [[ -f "$LC/setup.done" ]]; then
   find "$LC/logs" -name '*.log' -size +20M -delete 2>/dev/null
   # FP8 copies are only used with LC_PROFILE=fp8; BF16 is the default, so free ~12 GB.
   [[ "${LC_PROFILE:-bf16}" != "fp8" ]] && rm -rf "$LC/models/EdenLive-x2v/quantized" 2>/dev/null
+fi
+
+if ! python3 -c "import torch" 2>/dev/null && [[ -z "${LC_LIGHT:-}" ]]; then
+  stage "load failed: env missing on volume (needs the full image once)"; wait $STATUS_PID; exit 1
 fi
 
 # 3. Python packages for this boot (container disk is wiped on every stop).
