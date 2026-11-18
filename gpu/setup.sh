@@ -31,8 +31,12 @@ pip download -q -d "$LC/wheels" cryptography pyOpenSSL aiortc aiohttp "comfy-kit
 # 2. Eden Live 5B weights only (~30 GB instead of the full 210 GB release).
 if [[ ! -f "$X2V/.converted" ]]; then
   log "downloading Eden 5B weights"
-  hf download VAST-AI/EdenLive --local-dir "$RAW" \
-    --include "dit-5b/*" "vae-5b/*" "decoder-5b/*" "umt5/*" "vision-encoder/*" "model_index.json"
+  python3 - "$RAW" <<'PY'
+import sys
+from huggingface_hub import snapshot_download
+snapshot_download("VAST-AI/EdenLive", local_dir=sys.argv[1], max_workers=16,
+    allow_patterns=["dit-5b/*", "vae-5b/*", "decoder-5b/*", "umt5/*", "vision-encoder/*", "model_index.json"])
+PY
 
   # 3. Convert to LightX2V layout (5B + text encoder; no CLIP, no 14B, no FLUX).
   log "converting weights"

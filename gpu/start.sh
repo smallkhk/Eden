@@ -25,6 +25,10 @@ import http.server, os, json
 LC = os.environ["LC"]
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path.startswith("/log") and os.environ.get("LC_SECRET") and self.path.endswith("k=" + os.environ["LC_SECRET"]):
+            try: body = b"".join(open(f"{LC}/logs/start.log", "rb").readlines()[-150:])
+            except OSError: body = b"no log"
+            self.send_response(200); self.send_header("Content-Type", "text/plain"); self.end_headers(); self.wfile.write(body); return
         try: body = open(f"{LC}/status.json", "rb").read()
         except OSError: body = b'{"ready":false,"stage":"booting"}'
         self.send_response(200); self.send_header("Content-Type", "application/json")
