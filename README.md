@@ -7,6 +7,7 @@ Webcam in, character out, in real time. Three engines, switchable in the UI:
 | Decart Lucy (`lucy-latest` = 2.6) | Decart API direct | 720p, + fast mode | Decart rates (fast = 2x) |
 | Eden Live 5B | fal.ai | 1280x704 @ 24fps | $0.0035/s |
 | Eden Live 14B | fal.ai | 832x480 @ 16fps | $0.01/s |
+| Eden 5B — own GPU | your RunPod RTX 5090 | 1280x704 @ ~24fps (FP8) | ~$1.39/hr while the GPU is on |
 
 ## Run (Ubuntu VPS, Node 22.13+)
 
@@ -165,3 +166,22 @@ The same `extension/` folder is built into the iOS app as a Safari extension ("L
 After installing the app: Settings → Apps → Safari → Extensions → LiveChar Camera → turn on, and allow it on all
 websites. Then in Safari tap the extensions button (puzzle piece in the address bar) → LiveChar Camera, paste the link.
 Works on the same iPhone: go live in LiveChar, switch to Safari, and LiveChar keeps streaming from its PiP window.
+
+## Own GPU (Eden 5B on RunPod)
+
+Runs Eden Live 5B yourself on a rented RTX 5090, billed per second only while it is on.
+
+1. Admin → **Own GPU** → paste your RunPod API key → Save settings.
+2. Press **Start GPU**. The first start creates a 100 GB network volume in EU-RO-1 and sets everything up
+   (20–40 min, once). Later starts take ~3–8 min. A notification pops up when it is ready.
+3. Users pick **Eden 5B — own GPU** and press Go live.
+4. It stops by itself after the idle time (default 15 min), or press **Stop GPU**.
+
+How it works: `lib/gpu.js` starts/stops the pod through the RunPod API. The pod runs `gpu/start.sh`
+(fetched from this repo), which sets up LightX2V + Eden 5B FP8 on the volume (`gpu/setup.sh`) and starts
+`gpu/eden_server.py`: webcam over WebRTC → Eden (LightX2V, `gpu/live_runner.py`) → video back, through a
+TURN relay on the pod (TCP 3478). The browser gets a short signed ticket from `/api/gpu/connect`.
+With a fal key set, the character "target look" frame is still built with FLUX on fal (a few cents);
+without one, the character image is used directly.
+
+Test the pod server without a GPU: `cd gpu && LC_STUB=1 LC_SECRET=x python3 eden_server.py` (echoes the webcam).

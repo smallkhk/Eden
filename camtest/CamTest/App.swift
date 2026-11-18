@@ -20,6 +20,7 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     private let queue = DispatchQueue(label: "camtest.session")
     private let photoOutput = AVCapturePhotoOutput()
     private let movieOutput = AVCaptureMovieFileOutput()
+    let mic = MicMonitor()          // captures the mic via AVCaptureAudioDataOutput (what the dylib hooks)
     private var videoInput: AVCaptureDeviceInput?
     private var rotation: AnyObject?
     private var rotationObs: [NSKeyValueObservation] = []
@@ -151,6 +152,7 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
             session.addInput(micIn)
         }
         if !session.outputs.contains(photoOutput), session.canAddOutput(photoOutput) { session.addOutput(photoOutput) }
+        if !session.outputs.contains(mic.output), session.canAddOutput(mic.output) { session.addOutput(mic.output) }
         if !session.outputs.contains(movieOutput), session.canAddOutput(movieOutput) { session.addOutput(movieOutput) }
         session.commitConfiguration()
         if !session.isRunning { session.startRunning() }
@@ -396,6 +398,7 @@ struct ContentView: View {
                 }
                 .padding(.horizontal).padding(.top, 8)
                 SourceBar()
+                MicBar(mic: cam.mic)
                 if !cam.message.isEmpty {
                     Text(cam.message).font(.subheadline.weight(.semibold))
                         .padding(.horizontal, 14).padding(.vertical, 8)
@@ -441,6 +444,32 @@ struct ContentView: View {
     }
 }
 
+
+/// Mic input meter + monitor — what an app captures from the microphone. With the LiveChar dylib
+/// injected and LiveChar's voice live, this is the transformed voice instead of the real mic.
+struct MicBar: View {
+    @ObservedObject var mic: MicMonitor
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "mic.fill").font(.caption)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.white.opacity(0.18))
+                    Capsule().fill(.green).frame(width: geo.size.width * CGFloat(min(1, mic.level * 6)))
+                }
+            }
+            .frame(height: 6)
+            Toggle("Monitor", isOn: Binding(get: { mic.monitorOn }, set: { mic.monitorOn = $0 }))
+                .labelsHidden().scaleEffect(0.8)
+            Text("Monitor").font(.caption2).foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(.ultraThinMaterial, in: Capsule())
+        .frame(maxWidth: 320)
+        .padding(.top, 4)
+    }
+}
 
 struct SourceBar: View {
     @EnvironmentObject var cam: CameraModel

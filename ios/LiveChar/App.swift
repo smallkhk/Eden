@@ -78,6 +78,7 @@ struct RootView: View {
         .task { await app.boot() }
         .onChange(of: app.config?.lucyModel) { _ in live.config = app.config }
         .onChange(of: app.user?.id) { _ in live.config = app.config }
+        .onChange(of: app.config?.engines.gpu) { _ in live.config = app.config }
     }
 }
 

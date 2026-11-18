@@ -26,6 +26,13 @@ struct StudioView: View {
             }
         }
         .screenBackground()
+        .task(id: live.engineID) {
+            // own GPU: keep its on/off status fresh while it is selected
+            while live.engineID == "eden-gpu", !Task.isCancelled {
+                if !live.running { await app.refreshUser() }
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+            }
+        }
         .sheet(isPresented: $showAccount) { AccountView().environmentObject(app).environmentObject(live) }
         .onChange(of: phase) { p in
             // with PiP the camera keeps running behind other apps; without it iOS pauses the camera, so stop billing
@@ -80,10 +87,19 @@ struct StudioView: View {
             .padding(12)
         }
         .overlay(alignment: .topTrailing) {
-            if live.hub.streamer != nil || (live.shareOn && live.running) {
-                Pill(text: live.shareProblem == nil ? "Link · \(live.viewers) watching" : "Link: slow", color: live.shareProblem == nil ? Theme.ok : Theme.bad)
-                    .padding(12)
+            VStack(alignment: .trailing, spacing: 6) {
+                if live.shareOn && (live.running || live.starting) {
+                    Pill(text: live.shareProblem == nil ? "Link · \(live.viewers) watching" : "Link: slow", color: live.shareProblem == nil ? Theme.ok : Theme.bad)
+                }
+                if live.running {
+                    switch live.hookClients {
+                    case .none: Pill(text: "Cam hook: feed failed", color: Theme.bad)
+                    case .some(0): Pill(text: "Cam hook · waiting", color: Theme.dim)
+                    case .some(let n): Pill(text: "Cam hook · \(n) app\(n == 1 ? "" : "s")", color: Theme.ok)
+                    }
+                }
             }
+            .padding(12)
         }
         .overlay(alignment: .bottomLeading) {
             if showInput && (live.running || live.starting) {
@@ -217,6 +233,8 @@ struct StudioView: View {
                 .tint(Theme.ok)
             }
 
+            if live.engineDef.kind == .edenGpu, app.user?.isAdmin == true { GpuControlCard() }
+
             if vClass == .compact { goButtons.padding(.top, 4) }
         }
     }
@@ -224,8 +242,16 @@ struct StudioView: View {
     private var engineLine: String {
         let e = live.engineDef
         let rate = app.config?.rates[e.id] ?? 1
-        let enabled = e.kind == .lucy ? (app.config?.engines.lucy ?? false) : (app.config?.engines.eden ?? false)
-        if !enabled { return "\(e.detail) · not set up" }
+        let enabled: Bool
+        switch e.kind {
+        case .lucy: enabled = app.config?.engines.lucy ?? false
+        case .eden: enabled = app.config?.engines.eden ?? false
+        case .edenGpu: enabled = app.config?.engines.gpu ?? false
+        }
+        if !enabled {
+            if e.kind == .edenGpu { return "\(e.detail) · " + (app.config?.engines.gpuStage == "starting" ? "GPU starting…" : "GPU off") }
+            return "\(e.detail) · not set up"
+        }
         return rate != 1 ? "\(e.detail) · \(String(format: "%g", rate))× rate" : e.detail
     }
 

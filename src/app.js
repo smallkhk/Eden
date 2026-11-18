@@ -26,6 +26,7 @@ const ENGINES = {
   lucy:     { label: "Decart Lucy",   kind: "lucy" },
   "eden-5b":  { label: "Eden Live 5B",  kind: "eden", endpoint: "vast/eden-live-5b-video",  w: 1280, h: 704, fps: 24, price: 0.0035 },
   "eden-14b": { label: "Eden Live 14B", kind: "eden", endpoint: "vast/eden-live-14b-video", w: 832,  h: 480, fps: 16, price: 0.01 },
+  "eden-gpu": { label: "Eden 5B (own GPU)", kind: "edengpu", w: 1280, h: 704, fps: 24 },
 };
 
 const LUCY_SWAP = "Substitute the character in the video with the person in the reference image.";
@@ -297,6 +298,87 @@ async function startEden(eng) {
   };
 }
 
+// ---------- Eden 5B on your own GPU (RunPod pod, WebRTC through its TURN relay) ----------
+async function startEdenGpu(eng) {
+  await openCamera(eng.w, eng.h, eng.fps);
+  const { stream, canvas } = exactStream(eng.w, eng.h, eng.fps);
+  setNote(refBlob ? "Hold still for a second…" : "");
+  // character → "target look" frame (fal FLUX if a fal key is set, else the raw character image)
+  const lookFrame = async () => {
+    if (!refBlob) return null;
+    if (cfg.engines.eden) return edenFirstFrame(eng, canvas);
+    return blobToDataUrl(refBlob);
+  };
+  const look = await lookFrame();
+  const promptText = () => ui.prompt.value.trim() || (refBlob ? EDEN_SWAP : "");
+
+  setStatus("connecting…");
+  const { url, token, iceServers } = await api("/api/gpu/connect", { id: bill?.id });
+  const pc = new RTCPeerConnection({ iceServers, iceTransportPolicy: "relay" });
+  const dc = pc.createDataChannel("control");
+  stream.getVideoTracks().forEach((t) => pc.addTrack(t, stream));
+  pc.addTransceiver("video", { direction: "recvonly" });
+  pc.ontrack = (e) => showOutput(e.streams[0] || new MediaStream([e.track]));
+  pc.onconnectionstatechange = () => {
+    const s = pc.connectionState;
+    if (s === "failed") setTimeout(() => run?.kind === "edengpu" && stopAll("Connection to the GPU failed"), 150);
+    else if (s !== "connected") setStatus(s);
+  };
+  let pingTimer = null, rtt = null;
+  dc.onopen = () => {
+    const m = { type: "configure" };
+    if (promptText()) m.prompt = promptText();
+    if (look && !look.startsWith("data:")) m.image_url = look;   // data URLs went with the offer (too big for the channel)
+    dc.send(JSON.stringify(m));
+    pingTimer = setInterval(() => dc.readyState === "open" && dc.send(JSON.stringify({ type: "ping", ts: Date.now() })), 3000);
+  };
+  dc.onmessage = (ev) => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    if (m.type === "configured" || m.type === "reset_applied") { setStatus("live", "ok"); setNote(""); }
+    else if (m.type === "prompt_applied") setNote("Prompt applied");
+    else if (m.type === "pong") { if (m.client_ts) rtt = Math.round(Date.now() - m.client_ts); }
+    else if (m.type === "stats") setStats({ fps: m.generation_fps, rtt: rtt != null ? rtt + "ms" : null, gpu: m.profile });
+    else if (m.type === "error") { setNote(`GPU: ${m.error}`); if (!m.retryable) stopAll("Error"); }
+    else if (m.type === "stream_exhausted") stopAll("The stream ended. Press Go live to start again.");
+  };
+
+  await pc.setLocalDescription(await pc.createOffer());
+  await new Promise((ok) => {
+    if (pc.iceGatheringState === "complete") return ok();
+    const t = setTimeout(ok, 4000);
+    pc.addEventListener("icegatheringstatechange", () => pc.iceGatheringState === "complete" && (clearTimeout(t), ok()));
+  });
+  const r = await fetch(`${url}/offer`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type, token, ...(look?.startsWith("data:") ? { image: look } : {}) }),
+  });
+  const ans = await r.json().catch(() => ({}));
+  if (!r.ok) { pc.close(); throw new Error(ans.error || `GPU HTTP ${r.status}`); }
+  await pc.setRemoteDescription(ans);
+
+  return {
+    kind: "edengpu",
+    stop: async () => {
+      clearInterval(pingTimer);
+      try { dc.readyState === "open" && dc.send(JSON.stringify({ type: "stop" })); } catch {}
+      pc.close();
+    },
+    apply: async () => {
+      if (refDirty) {
+        const img = await lookFrame();
+        const p = promptText() ? { prompt: promptText() } : {};
+        if (img?.startsWith("data:")) {
+          const { token: t } = await api("/api/gpu/connect", { id: bill?.id });   // fresh ticket
+          const r = await fetch(`${url}/reset`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: t, image: img, ...p }) });
+          if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "Could not change the character");
+        } else dc.send(JSON.stringify({ type: "reset", ...(img ? { image_url: img } : {}), ...p }));
+      } else if (promptText()) {
+        dc.send(JSON.stringify({ type: "prompt", prompt: promptText() }));
+      }
+    },
+  };
+}
+
 // ---------- control ----------
 let capTimeout = null;
 // Billing starts when the first output frame arrives (or 20s after start, whichever is first).
@@ -321,7 +403,7 @@ async function startAll() {
     // open the paid session first: the server sets how long it may run
     const s = await api("/api/session/start", { engine: ui.engine.value });
     bill = { id: s.id, timer: null, live: false, fallback: setTimeout(goLive, 20000) }; setBalance(s.balance);
-    run = eng.kind === "lucy" ? await startLucy() : await startEden(eng);
+    run = eng.kind === "lucy" ? await startLucy() : eng.kind === "edengpu" ? await startEdenGpu(eng) : await startEden(eng);
     refDirty = false;
     ui.stop.disabled = false; ui.apply.disabled = false; ui.engine.disabled = true; ui.orient.disabled = true;
     startVoice();
@@ -673,7 +755,7 @@ ui.au.addEventListener("keydown", (e) => e.key === "Enter" && ui.pw.focus());
 ui.authSwap.addEventListener("click", () => { ui.pwErr.textContent = ""; showAuth(authMode === "register" ? "login" : "register"); });
 ui.logout.addEventListener("click", async () => { await stopAll(); await api("/api/logout", {}).catch(() => {}); location.reload(); });
 
-const LABELS = { lucy: "Decart Lucy — 720p, fastest", "eden-5b": "Eden Live 5B — 720p @ 24fps", "eden-14b": "Eden Live 14B — 480p @ 16fps" };
+const LABELS = { lucy: "Decart Lucy — 720p, fastest", "eden-5b": "Eden Live 5B — 720p @ 24fps", "eden-14b": "Eden Live 14B — 480p @ 16fps", "eden-gpu": "Eden 5B — own GPU" };
 async function boot() {
   cfg = await api("/api/config");
   if (!cfg.user) { ui.userBox.hidden = true; showAuth(cfg.hasUsers ? "login" : "register"); return; }
@@ -684,10 +766,11 @@ async function boot() {
   listCameras().catch(() => {});
   loadVoicePrefs(); loadVoices().catch(() => {});
   for (const o of ui.engine.options) {
-    const on = ENGINES[o.value].kind === "lucy" ? cfg.engines.lucy : cfg.engines.eden;
+    const kind = ENGINES[o.value].kind;
+    const on = kind === "lucy" ? cfg.engines.lucy : kind === "edengpu" ? cfg.engines.gpu : cfg.engines.eden;
     const rate = cfg.rates[o.value];
     o.disabled = !on;
-    o.textContent = LABELS[o.value] + (!on ? " (not set up)" : rate && rate !== 1 ? ` · ${rate}× rate` : "");
+    o.textContent = LABELS[o.value] + (!on ? (kind === "edengpu" ? (cfg.engines.gpuStage === "starting" ? " (GPU starting…)" : " (GPU off)") : " (not set up)") : rate && rate !== 1 ? ` · ${rate}× rate` : "");
   }
   const first = [...ui.engine.options].find((o) => !o.disabled);
   if (first) { if (ui.engine.selectedOptions[0]?.disabled) ui.engine.value = first.value; }

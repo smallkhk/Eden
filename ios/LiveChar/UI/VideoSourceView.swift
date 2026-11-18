@@ -46,8 +46,18 @@ struct VideoSourceCard: View {
                     .background(Theme.well, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.line))
                 }
-                Text("Plays straight to your live cam, looped and filling the screen. No AI, no balance used.")
-                    .font(.caption).foregroundStyle(Theme.dim)
+                HStack {
+                    Text("Plays straight to your live cam, looped and filling the screen. No AI, no balance used.")
+                        .font(.caption).foregroundStyle(Theme.dim)
+                    Spacer()
+                    Button { live.rotateVideo() } label: { Label("\(live.videoRotation)°", systemImage: "rotate.right") }
+                        .buttonStyle(SoftButtonStyle())
+                        .disabled(live.videoName.isEmpty)
+                }
+                Toggle(isOn: Binding(get: { live.videoAudioOn }, set: { live.videoAudioOn = $0 })) {
+                    Text("Send the clip's sound to the stream").font(.caption).foregroundStyle(Theme.dim)
+                }
+                .disabled(live.running || live.starting)
                 if !error.isEmpty { Text(error).font(.caption).foregroundStyle(Theme.bad) }
             }
         }

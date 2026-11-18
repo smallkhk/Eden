@@ -3,7 +3,8 @@ import Foundation
 import QuartzCore
 import VideoToolbox
 
-/// Encodes the output to H.264 on the hardware encoder and uploads it to the user's watch link.
+/// Encodes the output to H.264 on the hardware encoder. Always feeds the same-phone LocalFeed (for the
+/// camera hook); uploads to the user's watch link only when `upload` is on ("Share live to my link").
 /// One upload in flight at a time; frames that pile up meanwhile go in the next one, so order is kept
 /// and a slow uplink costs delay, never corruption (it skips to the next keyframe instead).
 final class ShareStreamer {
@@ -16,6 +17,16 @@ final class ShareStreamer {
     private var waitKey = true
     private var stopped = false
     private var failures = 0
+    private var _upload = false
+    private var everUploaded = false
+
+    init(upload: Bool) { _upload = upload; everUploaded = upload; LocalFeed.shared.start() }
+
+    /// Internet live link on/off while running (the same-phone feed stays on).
+    var upload: Bool {
+        get { queue.sync { _upload } }
+        set { queue.async { self._upload = newValue; if newValue { self.everUploaded = true } else { self.pending.removeAll() } } }
+    }
 
     /// main thread
     var onViewers: ((Int) -> Void)?
@@ -51,7 +62,10 @@ final class ShareStreamer {
             header[0] = UInt8(length >> 24); header[1] = UInt8(length >> 16 & 0xff); header[2] = UInt8(length >> 8 & 0xff); header[3] = UInt8(length & 0xff)
             header[4] = 4
             for i in 0..<8 { header[5 + i] = UInt8(ts >> (56 - 8 * UInt64(i)) & 0xff) }
-            self.pending.append(header); self.pending.append(pcm)
+            var packet = header; packet.append(pcm)
+            LocalFeed.shared.send(packet, isKey: false)     // same-phone: voice reaches the hook / Cam Test
+            guard self._upload else { return }
+            self.pending.append(packet)
             self.flush()
         }
     }
@@ -65,7 +79,8 @@ final class ShareStreamer {
                                             outputCallback: nil, refcon: nil, compressionSessionOut: &vt)
         guard st == noErr, let vt else { return }
         let pixels = s.width * s.height
-        let bitrate = pixels >= 900_000 ? 3_500_000 : 2_000_000
+        // same phone only (no internet upload): spend more bits for a cleaner picture
+        let bitrate = _upload ? (pixels >= 900_000 ? 3_500_000 : 2_000_000) : (pixels >= 900_000 ? 8_000_000 : 5_000_000)
         VTSessionSetProperty(vt, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         VTSessionSetProperty(vt, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_High_AutoLevel)
         VTSessionSetProperty(vt, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
@@ -127,7 +142,10 @@ final class ShareStreamer {
         header[0] = UInt8(length >> 24); header[1] = UInt8(length >> 16 & 0xff); header[2] = UInt8(length >> 8 & 0xff); header[3] = UInt8(length & 0xff)
         header[4] = isKey ? 1 : 0
         for i in 0..<8 { header[5 + i] = UInt8(ts >> (56 - 8 * UInt64(i)) & 0xff) }
-        pending.append(header); pending.append(annexB)
+        var packet = header; packet.append(annexB)
+        LocalFeed.shared.send(packet, isKey: isKey)     // same phone: instant, every frame
+        guard _upload else { return }
+        pending.append(packet)
 
         if pending.count > 4_000_000 {      // uplink can't keep up: drop and restart from a keyframe
             pending.removeAll(); forceKey = true; waitKey = true
@@ -173,7 +191,8 @@ final class ShareStreamer {
             if let s = self.session { VTCompressionSessionCompleteFrames(s, untilPresentationTimeStamp: .invalid); VTCompressionSessionInvalidate(s) }
             self.session = nil
             self.pending.removeAll()
-            Task { try? await API.shared.post("/api/share/stop") }
+            LocalFeed.shared.ended()
+            if self.everUploaded { Task { try? await API.shared.post("/api/share/stop") } }
         }
     }
 }

@@ -2,7 +2,7 @@ name: Build LiveChar camera hook (dylib)
 
 on:
   push:
-    branches: [main]
+    branches: [main, gpu-runpod]
     paths: ["camhook/**", ".github/workflows/build-camhook.yml"]
   workflow_dispatch:
 
@@ -21,7 +21,7 @@ jobs:
           clang -dynamiclib -arch arm64 -isysroot "$SDK" -mios-version-min=14.0 -fobjc-arc -fmodules \
             -Wall -Wno-deprecated-declarations \
             -framework Foundation -framework UIKit -framework AVFoundation \
-            -framework CoreMedia -framework CoreVideo -framework VideoToolbox -framework QuartzCore \
+            -framework CoreMedia -framework CoreVideo -framework VideoToolbox -framework QuartzCore -framework Network \
             -install_name @executable_path/LiveCharHook.dylib \
             camhook/LiveCharHook/LiveCharHook.m -o LiveCharHook.dylib
           file LiveCharHook.dylib
