@@ -186,9 +186,7 @@ class EdenEngine:
                 req = dict(self.base_request, prompt=live.prompt or DEFAULT_PROMPT, image_path=live.cover_path, seed=random.randint(1, 2**31 - 1))
                 try:
                     r.run_request(r.prepare_request(req))
-                    if not live.ended and not live.restart:
-                        live.on_event({"type": "stream_exhausted"})
-                        live.ended = True
+                    # clip finished: loop straight into the next one so the stream never ends
                 except StopLive:
                     pass
                 except Exception as e:  # report and stop this session; the engine stays loaded
