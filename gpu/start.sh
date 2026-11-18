@@ -12,6 +12,8 @@ export LC=/workspace/lc
 export LC_CODE_URL="${LC_CODE_URL:-https://raw.githubusercontent.com/smallkhk/Eden/main/gpu}"
 export LC_PORT="${LC_PORT:-8000}"
 export PIP_CACHE_DIR="$LC/pip-cache" HF_HOME="$LC/hf-home" PIP_ROOT_USER_ACTION=ignore
+export TRITON_CACHE_DIR="$LC/cache/triton" TORCH_EXTENSIONS_DIR="$LC/cache/torch_ext" \
+       FLASHINFER_WORKSPACE_BASE="$LC/cache" TORCHINDUCTOR_CACHE_DIR="$LC/cache/inductor" XDG_CACHE_HOME="$LC/cache"
 mkdir -p "$LC/app" "$LC/wheels" "$LC/apt" "$LC/logs"
 exec > >(tee -a "$LC/logs/start.log") 2>&1
 echo "=== LiveChar GPU start $(date -u +%FT%TZ) ==="
@@ -54,7 +56,7 @@ if [[ ! -f "$LC/setup.done" ]]; then
 fi
 
 # Light mode: small RunPod base image, Python + CUDA libs come from the volume snapshot.
-if ! python3 -c "import torch" 2>/dev/null && [[ -f "$LC/env/.done" ]]; then
+if ! python3 -c "import torch" 2>/dev/null && [[ -f "$LC/env/.done" && -f "$LC/env/cuda/.done" ]]; then
   export LC_LIGHT=1
   PY312=$(command -v python3.12 || true)
   if [[ -z "$PY312" ]]; then stage "load failed: light image has no python3.12"; wait $STATUS_PID; exit 1; fi
@@ -63,7 +65,9 @@ if ! python3 -c "import torch" 2>/dev/null && [[ -f "$LC/env/.done" ]]; then
   printf 'import site\nsite.addsitedir("%s")\nsite.addsitedir("%s")\n' "$LC/env/site" "$LC/env/site-deb" > /tmp/lcbin/sitecustomize.py
   export PYTHONPATH="/tmp/lcbin:$LC/env/site${PYTHONPATH:+:$PYTHONPATH}"
   export LD_LIBRARY_PATH="$LC/env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-  export PATH="/tmp/lcbin:$LC/env/bin:$PATH"
+  export CUDA_HOME="$LC/env/cuda" CUDA_PATH="$LC/env/cuda"
+  export PATH="/tmp/lcbin:$LC/env/bin:$CUDA_HOME/bin:$PATH"
+  export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
   echo ">>> light image: using Python env from the volume"
 fi
 
@@ -75,6 +79,13 @@ pip install -q "$LC"/wheels/*.whl --no-deps 2>/dev/null || true
 pip install -q --ignore-installed --find-links "$LC/wheels" cryptography pyOpenSSL
 pip install -q --find-links "$LC/wheels" aiortc aiohttp av
 pip install -q -U "comfy-kitchen>=0.2.15"   # needs its full deps for int8_linear (FP8 profile)
+
+# One-time: copy the CUDA toolkit (nvcc, headers) so light boots can JIT-compile kernels.
+if [[ ! -f "$LC/env/cuda/.done" && -d /usr/local/cuda ]]; then
+  stage "saving CUDA toolkit to volume (one time)"
+  mkdir -p "$LC/env/cuda" && cp -aL /usr/local/cuda/. "$LC/env/cuda/" && date > "$LC/env/cuda/.done" \
+    || { echo "warn: CUDA snapshot failed"; rm -rf "$LC/env/cuda"; }
+fi
 
 # One-time: snapshot this image's Python + CUDA libs onto the volume so later boots
 # can use the small base image (seconds to pull instead of ~10 min).
