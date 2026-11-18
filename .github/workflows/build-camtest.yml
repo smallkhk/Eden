@@ -2,7 +2,7 @@ name: Build Cam Test (iOS)
 
 on:
   push:
-    branches: [main]
+    branches: [main, gpu-runpod]
     paths: ["camtest/**", ".github/workflows/build-camtest.yml"]
   workflow_dispatch:
 

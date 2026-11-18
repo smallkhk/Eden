@@ -45,6 +45,10 @@ static NSString *const kLinkKey = @"livechar.hooklink";
 - (void)ensureRunning;
 - (CVPixelBufferRef)copyLatest CF_RETURNS_RETAINED;   // nil if nothing decoded yet
 - (CVPixelBufferRef)copyLatestSeq:(uint64_t *)seq CF_RETURNS_RETAINED;
+// transformed voice (16 kHz mono s16le) for the virtual mic
+- (void)appendAudio:(const int16_t *)s count:(NSUInteger)n;
+- (BOOL)pullAudio:(int16_t *)out frames:(int)frames rate:(double)rate;   // YES = real audio written, NO = underflow (out zeroed)
+- (BOOL)audioActive;   // voice heard within the last ~2 s
 @property (atomic, copy) NSString *state;
 @property (atomic) NSInteger localFails;   // consecutive failed tries of the same-phone feed
 @end
@@ -73,6 +77,10 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
     nw_connection_t _local;        // same-phone feed: raw TCP to 127.0.0.1 (not subject to ATS)
     BOOL _headerDone;
     dispatch_queue_t _netQ;
+    NSMutableData *_audio;         // transformed voice, int16 mono @16k, FIFO
+    double _resPos;                // fractional read index into _audio (resampler)
+    double _lastAudio;             // host time of the last voice packet
+    NSLock *_audioLock;
 }
 
 + (LCFeed *)shared {
@@ -87,6 +95,8 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
         _needKey = YES;
         _queue = [NSMutableArray array];
         _delay = 0.08;
+        _audio = [NSMutableData data];
+        _audioLock = [NSLock new];
         _netQ = dispatch_queue_create("livechar.hook.net", DISPATCH_QUEUE_SERIAL);
         NSURLSessionConfiguration *c = [NSURLSessionConfiguration defaultSessionConfiguration];
         c.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
@@ -239,7 +249,10 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
 - (void)packet:(const uint8_t *)p length:(NSUInteger)len {
     uint8_t flags = p[0];
     if (flags & 2) { _needKey = YES; return; }   // stream ended
-    if (flags & 4) return;                        // audio — a camera has no sound
+    if (flags & 4) {                              // transformed voice for the virtual mic
+        if (len > 9) [self appendAudio:(const int16_t *)(p + 9) count:(len - 9) / 2];
+        return;
+    }
     BOOL key = (flags & 1) != 0;
     uint64_t tsus = 0;
     for (int i = 0; i < 8; i++) tsus = (tsus << 8) | p[1 + i];
@@ -352,6 +365,65 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
     if (seq) *seq = _seq;
     [_lock unlock];
     return px;
+}
+
+#pragma mark voice buffer (for the virtual mic)
+
+- (void)appendAudio:(const int16_t *)s count:(NSUInteger)n {
+    if (n == 0) return;
+    [_audioLock lock];
+    [_audio appendBytes:s length:n * 2];
+    NSUInteger cap = 16000 * 2 * 2;                 // keep at most ~2 s
+    if (_audio.length > cap) {
+        NSUInteger drop = _audio.length - cap;
+        uint8_t *buf = _audio.mutableBytes;
+        memmove(buf, buf + drop, cap);
+        _audio.length = cap;
+    }
+    _lastAudio = CACurrentMediaTime();
+    [_audioLock unlock];
+}
+
+- (BOOL)audioActive {
+    [_audioLock lock];
+    BOOL on = (CACurrentMediaTime() - _lastAudio) < 2.0;
+    [_audioLock unlock];
+    return on;
+}
+
+// Resample the mono 16 kHz FIFO to `frames` samples at `rate`. YES if enough was buffered.
+- (BOOL)pullAudio:(int16_t *)out frames:(int)frames rate:(double)rate {
+    if (frames <= 0 || rate <= 0) return NO;
+    double ratio = 16000.0 / rate;
+    [_audioLock lock];
+    NSUInteger have = _audio.length / 2;
+    double endPos = _resPos + ratio * (frames - 1);
+    if (have < (NSUInteger)ceil(endPos) + 2) {      // underflow (between words or not live)
+        [_audioLock unlock];
+        memset(out, 0, (size_t)frames * 2);
+        return NO;
+    }
+    int16_t *src = (int16_t *)_audio.mutableBytes;
+    double pos = _resPos;
+    for (int j = 0; j < frames; j++) {
+        NSUInteger i0 = (NSUInteger)pos;
+        double frac = pos - (double)i0;
+        int a = src[i0];
+        int b = (i0 + 1 < have) ? src[i0 + 1] : a;
+        out[j] = (int16_t)(a + (int)((b - a) * frac));
+        pos += ratio;
+    }
+    NSUInteger consumed = (NSUInteger)pos;
+    if (consumed > 0 && consumed <= have) {
+        NSUInteger remain = have - consumed;
+        memmove(src, src + consumed, remain * 2);
+        _audio.length = remain * 2;
+        _resPos = pos - (double)consumed;
+    } else {
+        _resPos = pos;
+    }
+    [_audioLock unlock];
+    return YES;
 }
 
 @end
@@ -613,11 +685,57 @@ static void LCRegisterPreview(AVCaptureVideoPreviewLayer *pl) {
 - (instancetype)lc_initWithSession:(AVCaptureSession *)session { id s = [self lc_initWithSession:session]; LCRegisterPreview(s); return s; }
 @end
 
-#pragma mark - frame delegate (AVCaptureVideoDataOutput)
+#pragma mark - frame delegate (AVCaptureVideoDataOutput / AVCaptureAudioDataOutput)
 
 static SEL kCbSel;   // captureOutput:didOutputSampleBuffer:fromConnection:
 
+// Overwrite a captured mic buffer in place with the transformed voice, matched to the app's audio format.
+static void lc_fillAudio(CMSampleBufferRef sb) {
+    if (![LCFeed.shared audioActive]) return;                 // not live: leave the real mic alone
+    CMFormatDescriptionRef fd = CMSampleBufferGetFormatDescription(sb);
+    if (!fd) return;
+    const AudioStreamBasicDescription *asbd = CMAudioFormatDescriptionGetStreamBasicDescription(fd);
+    if (!asbd || asbd->mFormatID != kAudioFormatLinearPCM) return;
+    CMItemCount frames = CMSampleBufferGetNumSamples(sb);
+    if (frames <= 0) return;
+    BOOL isFloat = (asbd->mFormatFlags & kAudioFormatFlagIsFloat) != 0;
+    BOOL nonInter = (asbd->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
+    UInt32 bits = asbd->mBitsPerChannel;
+
+    int16_t *mono = malloc(sizeof(int16_t) * (size_t)frames);
+    if (!mono) return;
+    [LCFeed.shared pullAudio:mono frames:(int)frames rate:asbd->mSampleRate];   // underflow -> silence (zeroed)
+
+    CMBlockBufferRef bb = NULL;
+    AudioBufferList abl;
+    OSStatus st = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sb, NULL, &abl, sizeof(abl),
+                                                                          NULL, NULL, 0, &bb);
+    if (st != noErr || !bb) { free(mono); return; }
+    for (UInt32 bi = 0; bi < abl.mNumberBuffers; bi++) {
+        void *dst = abl.mBuffers[bi].mData;
+        UInt32 ch = abl.mBuffers[bi].mNumberChannels ?: 1;    // interleaved: all channels; planar: 1
+        if (!dst) continue;
+        for (CMItemCount f = 0; f < frames; f++) {
+            int16_t v = mono[f];
+            for (UInt32 c = 0; c < ch; c++) {
+                size_t idx = nonInter ? (size_t)f : (size_t)f * ch + c;
+                if (isFloat && bits == 32) ((float *)dst)[idx] = (float)v / 32768.0f;
+                else if (!isFloat && bits == 16) ((int16_t *)dst)[idx] = v;
+                else if (!isFloat && bits == 32) ((int32_t *)dst)[idx] = (int32_t)v << 16;
+            }
+        }
+    }
+    CFRelease(bb);
+    free(mono);
+}
+
 static void lc_didOutput(id self, SEL _cmd, AVCaptureOutput *output, CMSampleBufferRef sb, AVCaptureConnection *conn) {
+    if ([output isKindOfClass:AVCaptureAudioDataOutput.class]) {
+        lc_fillAudio(sb);
+        void (*origA)(id, SEL, id, CMSampleBufferRef, id) = (__bridge void *)objc_getAssociatedObject([self class], kCbSel);
+        if (origA) origA(self, _cmd, output, sb, conn);
+        return;
+    }
     LCEnsureLink();
     CVPixelBufferRef px = [LCFeed.shared copyLatest];
     void (*orig)(id, SEL, id, CMSampleBufferRef, id) = (__bridge void *)objc_getAssociatedObject([self class], kCbSel);
@@ -652,27 +770,40 @@ static void lc_didOutput(id self, SEL _cmd, AVCaptureOutput *output, CMSampleBuf
     if (orig) orig(self, _cmd, output, sb, conn);
 }
 
+// Replace captureOutput:didOutputSampleBuffer:fromConnection: on a delegate's class (once).
+static void LCHookDelegateClass(Class cls) {
+    if (!cls) return;
+    @synchronized (cls) {
+        if (!objc_getAssociatedObject(cls, kCbSel)) {
+            Method m = class_getInstanceMethod(cls, kCbSel);
+            if (m) {
+                IMP old = method_getImplementation(m);
+                objc_setAssociatedObject(cls, kCbSel, (__bridge id)(void *)old, OBJC_ASSOCIATION_ASSIGN);
+                class_replaceMethod(cls, kCbSel, (IMP)lc_didOutput, method_getTypeEncoding(m));
+            } else {
+                objc_setAssociatedObject(cls, kCbSel, (__bridge id)(void *)NULL, OBJC_ASSOCIATION_ASSIGN);
+                class_addMethod(cls, kCbSel, (IMP)lc_didOutput, "v@:@@@");
+            }
+        }
+    }
+}
+
 @interface AVCaptureVideoDataOutput (LiveChar)
 @end
 @implementation AVCaptureVideoDataOutput (LiveChar)
 - (void)lc_setSampleBufferDelegate:(id<AVCaptureVideoDataOutputSampleBufferDelegate>)delegate queue:(dispatch_queue_t)queue {
-    if (delegate) {
-        Class cls = [delegate class];
-        @synchronized (cls) {
-            if (!objc_getAssociatedObject(cls, kCbSel)) {
-                Method m = class_getInstanceMethod(cls, kCbSel);
-                if (m) {
-                    IMP old = method_getImplementation(m);
-                    objc_setAssociatedObject(cls, kCbSel, (__bridge id)(void *)old, OBJC_ASSOCIATION_ASSIGN);
-                    class_replaceMethod(cls, kCbSel, (IMP)lc_didOutput, method_getTypeEncoding(m));
-                } else {
-                    objc_setAssociatedObject(cls, kCbSel, (__bridge id)(void *)NULL, OBJC_ASSOCIATION_ASSIGN);
-                    class_addMethod(cls, kCbSel, (IMP)lc_didOutput, "v@:@@@");
-                }
-            }
-        }
-    }
+    if (delegate) LCHookDelegateClass([delegate class]);
     [self lc_setSampleBufferDelegate:delegate queue:queue];
+    LCEnsureLink();
+}
+@end
+
+@interface AVCaptureAudioDataOutput (LiveChar)
+@end
+@implementation AVCaptureAudioDataOutput (LiveChar)
+- (void)lc_setAudioSampleBufferDelegate:(id<AVCaptureAudioDataOutputSampleBufferDelegate>)delegate queue:(dispatch_queue_t)queue {
+    if (delegate) LCHookDelegateClass([delegate class]);
+    [self lc_setAudioSampleBufferDelegate:delegate queue:queue];   // swizzled: calls the real setter
     LCEnsureLink();
 }
 @end
@@ -687,6 +818,7 @@ static void LiveCharHookInit(void) {
         LCSwizzle(AVCaptureVideoPreviewLayer.class, @selector(setSession:), @selector(lc_setSession:));
         LCSwizzle(AVCaptureVideoPreviewLayer.class, @selector(initWithSession:), @selector(lc_initWithSession:));
         LCSwizzle(AVCaptureVideoDataOutput.class, @selector(setSampleBufferDelegate:queue:), @selector(lc_setSampleBufferDelegate:queue:));
+        LCSwizzle(AVCaptureAudioDataOutput.class, @selector(setSampleBufferDelegate:queue:), @selector(lc_setAudioSampleBufferDelegate:queue:));
         NSLog(@"[LiveCharHook] loaded");
     }
 }
