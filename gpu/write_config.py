@@ -40,7 +40,7 @@ def main():
         cfg["proxy_quantized_ckpt"] = str(fp8_files[2])
         cfg["t5_original_ckpt"] = str(X2V / "umt5/text_encoder/model.safetensors")
         cfg["t5_tokenizer_path"] = str(X2V / "umt5/tokenizer")
-    cfg["request_defaults"] = {"size": [704, 1280], "num_frames": 717}  # profile default; longer runs OOM on 32 GB, the runner loops
+    cfg["request_defaults"] = {"size": [1280, 704], "num_frames": 717}  # [H, W] portrait;  # profile default; longer runs OOM on 32 GB, the runner loops
 
     out = LC / "runtime.json"
     out.write_text(json.dumps(cfg, indent=2) + "\n")

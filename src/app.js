@@ -26,7 +26,7 @@ const ENGINES = {
   lucy:     { label: "Decart Lucy",   kind: "lucy" },
   "eden-5b":  { label: "Eden Live 5B",  kind: "eden", endpoint: "vast/eden-live-5b-video",  w: 1280, h: 704, fps: 24, price: 0.0035 },
   "eden-14b": { label: "Eden Live 14B", kind: "eden", endpoint: "vast/eden-live-14b-video", w: 832,  h: 480, fps: 16, price: 0.01 },
-  "eden-gpu": { label: "Eden 5B (own GPU)", kind: "edengpu", w: 1280, h: 704, fps: 24 },
+  "eden-gpu": { label: "Eden 5B (own GPU)", kind: "edengpu", w: 704, h: 1280, fps: 24 },
 };
 
 const LUCY_SWAP = "Substitute the character in the video with the person in the reference image.";

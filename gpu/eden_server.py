@@ -30,6 +30,12 @@ from PIL import Image
 
 from live_runner import FPS, H, W, EdenEngine, LiveSession, StubEngine
 
+# aiortc's default video bitrate (~1 Mbps) makes the stream blocky; give the encoder room.
+from aiortc.codecs import h264 as _h264, vp8 as _vp8
+for _c in (_h264, _vp8):
+    for _name, _val in (("DEFAULT_BITRATE", 4_000_000), ("MIN_BITRATE", 1_500_000), ("MAX_BITRATE", 8_000_000)):
+        if hasattr(_c, _name): setattr(_c, _name, _val)
+
 LC = os.environ.get("LC", "/workspace/lc")
 PORT = int(os.environ.get("LC_PORT", "8000"))
 SECRET = os.environ.get("LC_SECRET", "")
@@ -104,7 +110,7 @@ async def read_camera(track, live):
         while not live.ended:
             frame = await track.recv()
             if frame.width != W or frame.height != H:
-                # cover-crop to 1280x704
+                # cover-crop to W x H (portrait 704x1280)
                 scale = max(W / frame.width, H / frame.height)
                 frame = frame.reformat(width=round(frame.width * scale), height=round(frame.height * scale))
                 img = frame.to_ndarray(format="rgb24")

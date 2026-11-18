@@ -16,7 +16,7 @@ import torch
 
 LC = os.environ.get("LC", "/workspace/lc")
 FPS = 24
-H, W = 704, 1280
+H, W = 1280, 704   # portrait: whole face in frame
 CHUNK = 3                       # latent frames per chunk = 12 output frames = 0.5 s
 DEFAULT_PROMPT = "A realistic person facing the camera, natural lighting, detailed, consistent identity."
 
@@ -147,7 +147,15 @@ class EdenEngine:
         from lightx2v.utils.cli import parse_cli_inputs
 
         model_path = f"{LC}/models/EdenLive-x2v"
-        placeholder = f"{LC}/placeholder.mp4"
+        placeholder = f"{LC}/placeholder_{W}x{H}.mp4"
+        if not os.path.exists(placeholder):   # blank clip in the live orientation
+            import av
+            c = av.open(placeholder, "w"); st = c.add_stream("libx264", rate=24)
+            st.width, st.height, st.pix_fmt = W, H, "yuv420p"
+            for _ in range(48):
+                for pk in st.encode(av.VideoFrame.from_ndarray(np.zeros((H, W, 3), np.uint8), format="rgb24")): c.mux(pk)
+            for pk in st.encode(): c.mux(pk)
+            c.close()
         cover = "/tmp/lc_cover_boot.png"
         from PIL import Image
         Image.new("RGB", (W, H), (40, 40, 40)).save(cover)

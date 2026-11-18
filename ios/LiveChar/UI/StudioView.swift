@@ -105,7 +105,7 @@ struct StudioView: View {
             if showInput && (live.running || live.starting) {
                 VideoSurfaceView(mirrored: live.previewMirrored, zoomable: false) { live.attachInput($0) }
                     .aspectRatio(live.isPortraitOutput ? 9.0 / 16 : CGFloat(live.engineDef.width) / CGFloat(live.engineDef.height), contentMode: .fit)
-                    .frame(width: live.isPortraitOutput ? 64 : 112)
+                    .frame(width: (live.isPortraitOutput || live.engineDef.width < live.engineDef.height) ? 64 : 112)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.you.opacity(0.8), lineWidth: 1.5))
                     .padding(12)
