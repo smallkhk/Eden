@@ -24,7 +24,7 @@ git -C "$LC/LightX2V" fetch --depth 1 origin "$LX2V_REF" && git -C "$LC/LightX2V
 pip install -q --no-deps -e "$LC/LightX2V"
 # Debian-installed packages (cryptography etc.) have no RECORD file; install over them instead of uninstalling.
 pip install -q --ignore-installed cryptography pyOpenSSL
-pip install -q -U huggingface_hub "comfy-kitchen>=0.2.15" aiortc aiohttp
+pip install -q -U "huggingface_hub>=1.5,<2.0" "comfy-kitchen>=0.2.15" aiortc aiohttp
 # keep wheels for fast reinstall on every boot
 pip download -q -d "$LC/wheels" cryptography pyOpenSSL aiortc aiohttp "comfy-kitchen>=0.2.15" || true
 
