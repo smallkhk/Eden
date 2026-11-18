@@ -80,7 +80,7 @@ const DEFAULTS = {
   smtp_host: "", smtp_port: "587", smtp_user: "", smtp_pass: "", smtp_from: "", site_url: "",
   // own GPU (RunPod)
   runpod_key: "", rate_eden_gpu: "1", gpu_idle_minutes: "15", gpu_volume_gb: "100",
-  gpu_type: "NVIDIA GeForce RTX 5090", gpu_datacenter: "EU-RO-1", gpu_cloud: "SECURE",
+  gpu_type: "NVIDIA GeForce RTX 5090", gpu_datacenter: "EUR-IS-1", gpu_cloud: "SECURE",
   gpu_image: "lightx2v/lightx2v:26062001-cu130-5090-fix-260921",
   gpu_code_url: "https://raw.githubusercontent.com/smallkhk/Eden/main/gpu",
   gpu_secret: "", gpu_volume_id: "", gpu_pod_id: "",
