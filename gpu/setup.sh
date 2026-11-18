@@ -8,7 +8,7 @@ LC="${LC:-/workspace/lc}"
 LX2V_REF="${LX2V_REF:-211495fe504bfa0238c832fa1a501487486fb334}"
 RAW="$LC/models/EdenLive"
 X2V="$LC/models/EdenLive-x2v"
-export PIP_CACHE_DIR="$LC/pip-cache" HF_HOME="$LC/hf-home" HF_HUB_ENABLE_HF_TRANSFER=1
+export PIP_CACHE_DIR="$LC/pip-cache" HF_HOME="$LC/hf-home" PIP_ROOT_USER_ACTION=ignore
 mkdir -p "$LC/models" "$LC/wheels"
 log() { echo "[setup $(date +%T)] $*"; printf '{"ready":false,"stage":"setup: %s"}\n' "$*" > "$LC/status.json"; }
 
@@ -22,9 +22,11 @@ if [[ ! -d "$LC/LightX2V/.git" ]]; then
 fi
 git -C "$LC/LightX2V" fetch --depth 1 origin "$LX2V_REF" && git -C "$LC/LightX2V" checkout -q FETCH_HEAD
 pip install -q --no-deps -e "$LC/LightX2V"
-pip install -q -U "huggingface_hub[hf_transfer]" "comfy-kitchen>=0.2.15" aiortc aiohttp
+# Debian-installed packages (cryptography etc.) have no RECORD file; install over them instead of uninstalling.
+pip install -q --ignore-installed cryptography pyOpenSSL
+pip install -q -U huggingface_hub "comfy-kitchen>=0.2.15" aiortc aiohttp
 # keep wheels for fast reinstall on every boot
-pip download -q -d "$LC/wheels" aiortc aiohttp "comfy-kitchen>=0.2.15" || true
+pip download -q -d "$LC/wheels" cryptography pyOpenSSL aiortc aiohttp "comfy-kitchen>=0.2.15" || true
 
 # 2. Eden Live 5B weights only (~30 GB instead of the full 210 GB release).
 if [[ ! -f "$X2V/.converted" ]]; then

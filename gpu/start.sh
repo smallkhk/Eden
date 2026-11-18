@@ -53,6 +53,7 @@ fi
 stage "installing packages"
 pip install -q --no-deps -e "$LC/LightX2V"
 pip install -q "$LC"/wheels/*.whl --no-deps 2>/dev/null || true
+pip install -q --ignore-installed --find-links "$LC/wheels" cryptography pyOpenSSL
 pip install -q --find-links "$LC/wheels" aiortc aiohttp av
 
 # 4. TURN relay: browsers reach the pod's WebRTC through TCP 3478.
