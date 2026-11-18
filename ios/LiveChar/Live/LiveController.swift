@@ -58,6 +58,7 @@ final class LiveController: ObservableObject {
     @Published var videoURL: URL?
     @Published var videoName = ""
     @AppStorage("lc.videoRotation") var videoRotation = 0 { willSet { objectWillChange.send() } }
+    @AppStorage("lc.videoAudioOn") var videoAudioOn = true { willSet { objectWillChange.send() } }
     private var videoPlayer: VideoFilePlayer?
 
     @AppStorage("lc.engine") var engineID = "lucy" { willSet { objectWillChange.send() } }
@@ -380,17 +381,19 @@ final class LiveController: ObservableObject {
         hub.reset()
         AudioSessionSetup.activate()
         let p = VideoFilePlayer(width: 720, height: 1280, rotation: videoRotation)
+        p.audioOn = videoAudioOn
         let hub = self.hub
         var gotFirst = false
         p.onFrame = { [weak self] pb in
             hub.push(pb)
             if !gotFirst { gotFirst = true; Task { @MainActor in self?.status = "playing video"; self?.statusLive = true } }
         }
+        p.onAudio = { pcm, at in hub.sendFileAudio(pcm, at: at) }   // clip's own sound → stream
         p.onError = { [weak self] m in Task { @MainActor in await self?.stop(reason: m) } }
         videoPlayer = p
-        p.start(url: url)
         pip.setEnabled(true)
-        startShare()
+        startShare()                                               // streamer ready before audio starts
+        p.start(url: url)
         running = true; starting = false
     }
 

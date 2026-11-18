@@ -96,6 +96,15 @@ final class OutputHub {
         }
     }
 
+    /// Audio from an uploaded video file (already in sync with its own frames — no lip-sync offset).
+    /// Goes to the same-phone feed / live link, and into a recording if one is running.
+    func sendFileAudio(_ pcm: Data, at: CFTimeInterval) {
+        queue.async {
+            if self.recorder != nil { self.recordedVoice.append((pcm, at)) }
+            self.streamer?.sendAudio(pcm, at: at)
+        }
+    }
+
     // MARK: photo
 
     func photo() async throws {

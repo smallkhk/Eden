@@ -54,6 +54,10 @@ struct VideoSourceCard: View {
                         .buttonStyle(SoftButtonStyle())
                         .disabled(live.videoName.isEmpty)
                 }
+                Toggle(isOn: Binding(get: { live.videoAudioOn }, set: { live.videoAudioOn = $0 })) {
+                    Text("Send the clip's sound to the stream").font(.caption).foregroundStyle(Theme.dim)
+                }
+                .disabled(live.running || live.starting)
                 if !error.isEmpty { Text(error).font(.caption).foregroundStyle(Theme.bad) }
             }
         }
