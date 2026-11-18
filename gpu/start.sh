@@ -59,6 +59,7 @@ pip install -q --no-deps -e "$LC/LightX2V"
 pip install -q "$LC"/wheels/*.whl --no-deps 2>/dev/null || true
 pip install -q --ignore-installed --find-links "$LC/wheels" cryptography pyOpenSSL
 pip install -q --find-links "$LC/wheels" aiortc aiohttp av
+pip install -q -U "comfy-kitchen>=0.2.15"   # needs its full deps for int8_linear (FP8 profile)
 
 # 4. TURN relay: browsers reach the pod's WebRTC through TCP 3478.
 stage "starting relay"
