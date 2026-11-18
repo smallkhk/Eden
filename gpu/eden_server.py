@@ -30,6 +30,16 @@ from PIL import Image
 
 from live_runner import FPS, H, W, EdenEngine, LiveSession, StubEngine
 
+faceswap_engine = None          # loaded on the first face-swap session (keeps Eden-only VRAM low)
+
+
+def get_faceswap():
+    global faceswap_engine
+    if faceswap_engine is None:
+        from faceswap import FaceSwapEngine
+        faceswap_engine = FaceSwapEngine()
+    return faceswap_engine
+
 # aiortc's default video bitrate (~1 Mbps) makes the stream blocky; give the encoder room.
 from aiortc.codecs import h264 as _h264, vp8 as _vp8
 for _c in (_h264, _vp8):
@@ -202,14 +212,23 @@ async def offer(req):
         pcs.discard(pc)
 
     def start_generation():
-        t = threading.Thread(target=lambda: (engine.run(live), loop.call_soon_threadsafe(lambda: asyncio.ensure_future(finish()))), name="lc-gen", daemon=True)
+        eng = get_faceswap() if claims.get("mode") == "faceswap" else engine
+
+        def work():
+            try:
+                eng.run(live)
+            except Exception as e:
+                send({"type": "error", "error": f"{type(e).__name__}: {e}"[:300], "retryable": False})
+            loop.call_soon_threadsafe(lambda: asyncio.ensure_future(finish()))
+
+        t = threading.Thread(target=work, name="lc-gen", daemon=True)
         gen["thread"] = t
         t.start()
 
     async def stats_loop():
         while not live.ended:
             await asyncio.sleep(2)
-            send({"type": "stats", "generation_fps": round(live.fps, 1) if live.fps else None, "profile": state["profile"]})
+            send({"type": "stats", "generation_fps": round(live.fps, 1) if live.fps else None, "profile": "faceswap" if claims.get("mode") == "faceswap" else state["profile"]})
 
     async def reset(m):
         if m.get("prompt"):

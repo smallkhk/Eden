@@ -20,6 +20,7 @@ struct EngineDef: Identifiable, Hashable {
         EngineDef(id: "eden-5b", label: "Eden 5B", detail: "720p · 24 fps", kind: .eden, endpoint: "vast/eden-live-5b-video", width: 1280, height: 704, fps: 24, price: 0.0035),
         EngineDef(id: "eden-14b", label: "Eden 14B", detail: "480p · 16 fps", kind: .eden, endpoint: "vast/eden-live-14b-video", width: 832, height: 480, fps: 16, price: 0.01),
         EngineDef(id: "eden-gpu", label: "My GPU", detail: "Eden 5B · own GPU · portrait · 24 fps", kind: .edenGpu, endpoint: "", width: 704, height: 1280, fps: 24, price: 0),
+        EngineDef(id: "dlc-gpu", label: "Face swap", detail: "Deep-Live-Cam · own GPU · portrait", kind: .edenGpu, endpoint: "", width: 704, height: 1280, fps: 24, price: 0),
     ]
     static func byID(_ id: String) -> EngineDef { all.first { $0.id == id } ?? all[0] }
 }
@@ -219,7 +220,8 @@ final class LiveController: ObservableObject {
                 try await eng.start(prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines), imageURL: imageURL, enhance: enhance)
             case .edenGpu:
                 let eng = GpuEdenEngine(sessionID: s.id, events: events)
-                let falLook = config.engines.eden
+                // face swap needs the real photo; Eden can use a FLUX "look" frame
+                let falLook = config.engines.eden && def.id != "dlc-gpu"
                 // character look: FLUX frame on fal when a fal key is set, else the image itself
                 let look: (Data) async throws -> String = { [weak self] img in
                     guard let self else { throw APIError(message: "Stopped", status: 0) }

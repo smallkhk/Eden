@@ -104,6 +104,7 @@ const ENGINES = {
   "eden-5b":  { rate: () => num("rate_eden_5b"),  provider: "fal", endpoint: "vast/eden-live-5b-video" },
   "eden-14b": { rate: () => num("rate_eden_14b"), provider: "fal", endpoint: "vast/eden-live-14b-video" },
   "eden-gpu": { rate: () => num("rate_eden_gpu"), provider: "gpu" },
+  "dlc-gpu": { rate: () => num("rate_eden_gpu"), provider: "gpu" },   // face swap on the same pod
 };
 
 // ---------- auth ----------
@@ -146,7 +147,7 @@ const requireAdmin = (req, res, next) =>
 const gpu = setupGpu({
   app, setting, setSetting, num, requireUser, requireAdmin,
   openSession: (userId) => openSession(userId),
-  anyGpuSession: () => !!q("SELECT 1 FROM sessions WHERE engine = 'eden-gpu' AND ended_at IS NULL LIMIT 1").get(),
+  anyGpuSession: () => !!q("SELECT 1 FROM sessions WHERE engine IN ('eden-gpu', 'dlc-gpu') AND ended_at IS NULL LIMIT 1").get(),
   isGpuEngine: (engine) => ENGINES[engine]?.provider === "gpu",
 });
 
@@ -216,7 +217,7 @@ app.get("/api/config", (req, res) => {
     lucyModel: setting("lucy_model"), lucyFast: setting("lucy_fast") === "1",
     engines: { lucy: !!setting("decart_key"), eden: !!setting("fal_key"), voice: !!setting("elevenlabs_key"), gpu: gpu.status().ready, gpuStage: gpu.status().state },
     canReset: !!setting("smtp_host"),
-    rates: { lucy: num("rate_lucy"), "eden-5b": num("rate_eden_5b"), "eden-14b": num("rate_eden_14b"), "eden-gpu": num("rate_eden_gpu"), firstFrame: num("first_frame_fee"), voice: num("rate_voice") },
+    rates: { lucy: num("rate_lucy"), "eden-5b": num("rate_eden_5b"), "eden-14b": num("rate_eden_14b"), "eden-gpu": num("rate_eden_gpu"), "dlc-gpu": num("rate_eden_gpu"), firstFrame: num("first_frame_fee"), voice: num("rate_voice") },
   });
 });
 

@@ -42,7 +42,7 @@ STATUS_PID=$!
 
 # 1. Latest server code from GitHub (keep the cached copy if GitHub is down).
 stage "fetching code"
-for f in setup.sh eden_server.py live_runner.py write_config.py; do
+for f in setup.sh eden_server.py live_runner.py write_config.py faceswap.py; do
   curl -fsSL "$LC_CODE_URL/$f" -o "$LC/app/$f.new" && mv "$LC/app/$f.new" "$LC/app/$f" || echo "warn: could not fetch $f, using cached copy"
 done
 
@@ -88,6 +88,8 @@ fi
 if [[ -f "$LC/setup.done" ]]; then
   rm -rf "$LC/pip-cache" "$LC/hf-home" "$LC/cutlass" "$LC/env/extra" "$LC/models/EdenLive" 2>/dev/null
   find "$LC/logs" -name '*.log' -size +20M -delete 2>/dev/null
+  # FP8 copies are only used with LC_PROFILE=fp8; BF16 is the default, so free ~12 GB.
+  [[ "${LC_PROFILE:-bf16}" != "fp8" ]] && rm -rf "$LC/models/EdenLive-x2v/quantized" 2>/dev/null
 fi
 
 # 3. Python packages for this boot (container disk is wiped on every stop).
@@ -148,6 +150,29 @@ fi
   fi
 
 fi
+
+# Face swap (Deep-Live-Cam pipeline): models + ONNX Runtime GPU (CUDA 13 build) on the volume. One time.
+if [[ ! -f "$LC/dlc/.done" ]]; then
+  stage "installing face swap (one time, ~3 min)"
+  mkdir -p "$LC/dlc/models" "$LC/dlc/pkgs"
+  HFB=https://huggingface.co/hacksider/deep-live-cam/resolve/main
+  ok=1
+  for f in buffalo_l/buffalo_l/det_10g.onnx buffalo_l/buffalo_l/w600k_r50.onnx inswapper_128_fp16.onnx GFPGANv1.4.onnx; do
+    out="$LC/dlc/models/$(basename "$f")"
+    if [[ ! -s "$out" ]]; then
+      if curl -fsSL --retry 3 -o "$out.part" "$HFB/$f"; then mv -f "$out.part" "$out"; else ok=0; fi
+    fi
+  done
+  python3 -m pip install -q --no-deps --target "$LC/dlc/pkgs" "onnxruntime-gpu==1.32.0" flatbuffers onnx || ok=0
+  PYTHONPATH="$LC/dlc/pkgs:${PYTHONPATH:-}" python3 -c "
+import onnx, numpy as np
+from onnx import numpy_helper
+m = onnx.load('$LC/dlc/models/inswapper_128_fp16.onnx')
+np.save('$LC/dlc/models/emap.npy', numpy_helper.to_array(m.graph.initializer[-1]).astype('float32'))
+print('emap saved')" || ok=0
+  [[ $ok == 1 ]] && date > "$LC/dlc/.done" || echo "warn: face swap install failed - Eden still works"
+fi
+export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$LC/dlc/pkgs"
 
 # 4. TURN relay: browsers reach the pod's WebRTC through TCP 3478.
 stage "starting relay"

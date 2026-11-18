@@ -27,6 +27,7 @@ const ENGINES = {
   "eden-5b":  { label: "Eden Live 5B",  kind: "eden", endpoint: "vast/eden-live-5b-video",  w: 1280, h: 704, fps: 24, price: 0.0035 },
   "eden-14b": { label: "Eden Live 14B", kind: "eden", endpoint: "vast/eden-live-14b-video", w: 832,  h: 480, fps: 16, price: 0.01 },
   "eden-gpu": { label: "Eden 5B (own GPU)", kind: "edengpu", w: 704, h: 1280, fps: 24 },
+  "dlc-gpu":  { label: "Face swap (own GPU)", kind: "edengpu", w: 704, h: 1280, fps: 24, faceswap: true },
 };
 
 const LUCY_SWAP = "Substitute the character in the video with the person in the reference image.";
@@ -306,7 +307,7 @@ async function startEdenGpu(eng) {
   // character → "target look" frame (fal FLUX if a fal key is set, else the raw character image)
   const lookFrame = async () => {
     if (!refBlob) return null;
-    if (cfg.engines.eden) return edenFirstFrame(eng, canvas);
+    if (cfg.engines.eden && !eng.faceswap) return edenFirstFrame(eng, canvas);   // face swap needs the real photo
     return blobToDataUrl(refBlob);
   };
   const look = await lookFrame();
@@ -755,7 +756,7 @@ ui.au.addEventListener("keydown", (e) => e.key === "Enter" && ui.pw.focus());
 ui.authSwap.addEventListener("click", () => { ui.pwErr.textContent = ""; showAuth(authMode === "register" ? "login" : "register"); });
 ui.logout.addEventListener("click", async () => { await stopAll(); await api("/api/logout", {}).catch(() => {}); location.reload(); });
 
-const LABELS = { lucy: "Decart Lucy — 720p, fastest", "eden-5b": "Eden Live 5B — 720p @ 24fps", "eden-14b": "Eden Live 14B — 480p @ 16fps", "eden-gpu": "Eden 5B — own GPU" };
+const LABELS = { lucy: "Decart Lucy — 720p, fastest", "eden-5b": "Eden Live 5B — 720p @ 24fps", "eden-14b": "Eden Live 14B — 480p @ 16fps", "eden-gpu": "Eden 5B — own GPU", "dlc-gpu": "Face swap (Deep-Live-Cam) — own GPU" };
 async function boot() {
   cfg = await api("/api/config");
   if (!cfg.user) { ui.userBox.hidden = true; showAuth(cfg.hasUsers ? "login" : "register"); return; }
