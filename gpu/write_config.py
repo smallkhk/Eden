@@ -29,6 +29,8 @@ def main():
     cfg = json.loads((PROFILES / name).read_text())
 
     cfg.pop("prompt_travel", None)          # live prompts come from the app
+    # CUDA graph capture crashes on the RunPod 5090 driver; compile + FP8 still apply. LC_CUDA_GRAPH=1 re-enables.
+    cfg["use_cuda_graph"] = os.environ.get("LC_CUDA_GRAPH") == "1"
     cfg["tae_path"] = str(X2V / "decoder-5b/lighttaew2_2.pth")
     if use_fp8:
         cfg["dit_quantized_ckpt"] = str(fp8_files[0])
