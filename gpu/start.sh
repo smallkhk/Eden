@@ -55,20 +55,27 @@ if [[ ! -f "$LC/setup.done" ]]; then
   fi
 fi
 
-# Light mode: small RunPod base image, Python + CUDA libs come from the volume snapshot.
-if ! python3 -c "import torch" 2>/dev/null && [[ -f "$LC/env/.done" && -f "$LC/env/cuda/.done" && -f "$LC/env/.v2" ]]; then
+# Light mode: small RunPod base image. Put the full image's folders back at their original
+# paths (symlinks into the volume) so every hard-coded path keeps working.
+if ! python3 -c "import torch" 2>/dev/null && [[ -f "$LC/env/.done" && -f "$LC/env/cuda/.done" && -f "$LC/env/.v3" ]]; then
   export LC_LIGHT=1
   PY312=$(command -v python3.12 || true)
   if [[ -z "$PY312" ]]; then stage "load failed: light image has no python3.12"; wait $STATUS_PID; exit 1; fi
+  ln -sfn "$LC/env/app" /app
+  rm -rf /usr/local/cuda && ln -s "$LC/env/cuda" /usr/local/cuda
+  mkdir -p /usr/local/lib/python3.12
+  rm -rf /usr/local/lib/python3.12/dist-packages && ln -s "$LC/env/site" /usr/local/lib/python3.12/dist-packages
+  rm -rf /usr/local/lib/x86_64-linux-gnu && ln -s "$LC/env/usrlocal-lib" /usr/local/lib/x86_64-linux-gnu
   mkdir -p /tmp/lcbin && ln -sf "$PY312" /tmp/lcbin/python3 && ln -sf "$PY312" /tmp/lcbin/python
-  # .pth files (editable LightX2V etc.) only load from site dirs, so register the snapshot as one.
-  printf 'import site\nsite.addsitedir("%s")\nsite.addsitedir("%s")\n' "$LC/env/site" "$LC/env/site-deb" > /tmp/lcbin/sitecustomize.py
-  export PYTHONPATH="/tmp/lcbin:$LC/env/site${PYTHONPATH:+:$PYTHONPATH}"
-  export LD_LIBRARY_PATH="$LC/env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-  export CUDA_HOME="$LC/env/cuda" CUDA_PATH="$LC/env/cuda"
-  export PATH="/tmp/lcbin:$LC/env/bin:$CUDA_HOME/bin:$PATH"
-  export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
-  echo ">>> light image: using Python env from the volume"
+  printf 'import site\nsite.addsitedir("%s")\n' "$LC/env/site-deb" > /tmp/lcbin/sitecustomize.py
+  export PYTHONPATH="/tmp/lcbin${PYTHONPATH:+:$PYTHONPATH}"
+  export CUDA_HOME=/usr/local/cuda CUDA_PATH=/usr/local/cuda
+  export PATH="/tmp/lcbin:/usr/local/cuda/bin:$LC/env/bin:$PATH"
+  export LD_LIBRARY_PATH="/usr/local/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:$LC/env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  export LIBRARY_PATH="/usr/local/cuda/lib64/stubs"
+  ldconfig 2>/dev/null || true
+  python3 -c "import torch, sageattention; print('>>> light image ok: torch', torch.__version__, 'cuda', torch.cuda.is_available())" \
+    || { stage "load failed: light image could not import torch/sageattention"; wait $STATUS_PID; exit 1; }
 fi
 
 # 3. Python packages for this boot (container disk is wiped on every stop).
@@ -102,42 +109,18 @@ if [[ ! -f "$LC/env/.done" ]]; then
   echo "$SITE" > "$LC/env/.done" && echo ">>> environment saved ($(du -sh "$LC/env" | cut -f1))" \
   || { echo "warn: env snapshot failed"; rm -rf "$LC/env"; }
 fi
-  # v2: packages installed outside site-packages (e.g. sageattention as a develop install)
-  # are linked via .pth/.egg-link - copy those folders onto the volume and repoint the links.
-  if [[ -f "$LC/env/.done" && ! -f "$LC/env/.v2" ]]; then
-    stage "saving extra packages to volume (one time)"
-    rm -rf "$LC/pip-cache"   # free space on the volume
-    python3 - "$LC/env" <<'PY' && date > "$LC/env/.v2" || echo "warn: extra package copy failed"
-import os, sys, shutil, importlib.util
-env = sys.argv[1]; site = os.path.join(env, "site"); extra = os.path.join(env, "extra")
-os.makedirs(extra, exist_ok=True)
-SITES = ("/usr/local/lib/python3.12/dist-packages", "/usr/lib/python3/dist-packages", "/workspace")
-def outside(p): return os.path.isabs(p) and not p.startswith(SITES)
-def move(path):
-    path = path.rstrip("/")
-    if not (outside(path) and os.path.isdir(path)): return path
-    dest = os.path.join(extra, path.strip("/").replace("/", "__"))
-    if not os.path.exists(dest):
-        shutil.copytree(path, dest, symlinks=True, ignore=shutil.ignore_patterns(".git"))
-        print("copied", path)
-    return dest
-for name in os.listdir(site):
-    if name.endswith((".pth", ".egg-link")):
-        f = os.path.join(site, name); lines = open(f).read().splitlines()
-        new = [l if (not l.strip() or l.startswith("import")) else move(l.strip()) for l in lines]
-        if new != lines: open(f, "w").write("\n".join(new) + "\n")
-for mod in ("sageattention", "flashinfer", "sgl_kernel", "lightx2v_kernel", "triton", "comfy_kitchen"):
-    spec = importlib.util.find_spec(mod)
-    if not spec or not spec.origin: print("not installed:", mod); continue
-    pkg = os.path.dirname(spec.origin) if spec.origin.endswith("__init__.py") else spec.origin
-    if outside(pkg):
-        dest = os.path.join(site, os.path.basename(pkg))
-        if not os.path.exists(dest):
-            (shutil.copytree if os.path.isdir(pkg) else shutil.copy2)(pkg, dest)
-            print("copied module", mod, "from", pkg)
-    print("ok", mod)
-PY
-    du -sh "$LC/env" 2>/dev/null
+  # v3: the image installs attention kernels in place under /app (editable installs) and
+  # extra libs in /usr/local/lib/x86_64-linux-gnu. Mirror them so light boots can put
+  # them back at the same paths - no path rewriting needed.
+  if [[ -f "$LC/env/.done" && ! -f "$LC/env/.v3" ]]; then
+    stage "saving kernels to volume (one time)"
+    rm -rf "$LC/pip-cache" "$LC/env/extra"
+    df -h /workspace | tail -1
+    mkdir -p "$LC/env/app" "$LC/env/usrlocal-lib"
+    { [[ -d /app ]] && tar -C /app --exclude=.git --exclude=build --exclude=cutlass --exclude='*.o' -cf - . | tar -C "$LC/env/app" -xf -; } && \
+    { [[ -d /usr/local/lib/x86_64-linux-gnu ]] && cp -a /usr/local/lib/x86_64-linux-gnu/. "$LC/env/usrlocal-lib/"; true; } && \
+    date > "$LC/env/.v3" && echo ">>> kernels saved ($(du -sh "$LC/env/app" | cut -f1)); volume: $(df -h /workspace | tail -1 | awk '{print $3"/"$2}')" \
+    || echo "warn: kernel copy failed (volume full?) - will keep using the full image"
   fi
 fi
 
