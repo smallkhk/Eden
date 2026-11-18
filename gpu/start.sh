@@ -53,13 +53,45 @@ if [[ ! -f "$LC/setup.done" ]]; then
   fi
 fi
 
+# Light mode: small RunPod base image, Python + CUDA libs come from the volume snapshot.
+if ! python3 -c "import torch" 2>/dev/null && [[ -f "$LC/env/.done" ]]; then
+  export LC_LIGHT=1
+  PY312=$(command -v python3.12 || true)
+  if [[ -z "$PY312" ]]; then stage "load failed: light image has no python3.12"; wait $STATUS_PID; exit 1; fi
+  mkdir -p /tmp/lcbin && ln -sf "$PY312" /tmp/lcbin/python3 && ln -sf "$PY312" /tmp/lcbin/python
+  # .pth files (editable LightX2V etc.) only load from site dirs, so register the snapshot as one.
+  printf 'import site\nsite.addsitedir("%s")\nsite.addsitedir("%s")\n' "$LC/env/site" "$LC/env/site-deb" > /tmp/lcbin/sitecustomize.py
+  export PYTHONPATH="/tmp/lcbin:$LC/env/site${PYTHONPATH:+:$PYTHONPATH}"
+  export LD_LIBRARY_PATH="$LC/env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  export PATH="/tmp/lcbin:$LC/env/bin:$PATH"
+  echo ">>> light image: using Python env from the volume"
+fi
+
 # 3. Python packages for this boot (container disk is wiped on every stop).
 stage "installing packages"
+if [[ -z "${LC_LIGHT:-}" ]]; then
 pip install -q --no-deps -e "$LC/LightX2V"
 pip install -q "$LC"/wheels/*.whl --no-deps 2>/dev/null || true
 pip install -q --ignore-installed --find-links "$LC/wheels" cryptography pyOpenSSL
 pip install -q --find-links "$LC/wheels" aiortc aiohttp av
 pip install -q -U "comfy-kitchen>=0.2.15"   # needs its full deps for int8_linear (FP8 profile)
+
+# One-time: snapshot this image's Python + CUDA libs onto the volume so later boots
+# can use the small base image (seconds to pull instead of ~10 min).
+if [[ ! -f "$LC/env/.done" ]]; then
+  stage "saving environment to volume (one time)"
+  SITE=$(python3 -c "import torch,os;print(os.path.dirname(os.path.dirname(torch.__file__)))")
+  mkdir -p "$LC/env/site" "$LC/env/lib" "$LC/env/bin"
+  mkdir -p "$LC/env/site-deb"
+  cp -a "$SITE/." "$LC/env/site/" && \
+  { [[ -d /usr/lib/python3/dist-packages ]] && cp -a /usr/lib/python3/dist-packages/. "$LC/env/site-deb/"; true; } && \
+  { [[ -d /usr/local/cuda/lib64 ]] && cp -aL /usr/local/cuda/lib64/. "$LC/env/lib/" 2>/dev/null; true; } && \
+  { cp -aL /usr/lib/x86_64-linux-gnu/libcudnn* /usr/lib/x86_64-linux-gnu/libnccl* "$LC/env/lib/" 2>/dev/null; true; } && \
+  { cp -a /usr/local/bin/. "$LC/env/bin/" 2>/dev/null; true; } && \
+  echo "$SITE" > "$LC/env/.done" && echo ">>> environment saved ($(du -sh "$LC/env" | cut -f1))" \
+  || { echo "warn: env snapshot failed"; rm -rf "$LC/env"; }
+fi
+fi
 
 # 4. TURN relay: browsers reach the pod's WebRTC through TCP 3478.
 stage "starting relay"
@@ -77,4 +109,16 @@ turnserver --listening-port 3478 --listening-ip "$PRIV_IP" --relay-ip "$PRIV_IP"
 stage "loading Eden 5B"
 kill $STATUS_PID 2>/dev/null; wait $STATUS_PID 2>/dev/null
 cd "$LC/app"
-exec python3 eden_server.py
+python3 eden_server.py
+# The server only exits on a crash: keep reporting it so the app stops the pod instead of billing.
+stage "load failed: model server exited (code $?)"
+python3 - <<'PY'
+import http.server, os
+LC = os.environ["LC"]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = open(f"{LC}/status.json", "rb").read()
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
+    def log_message(self, *a): pass
+http.server.ThreadingHTTPServer(("0.0.0.0", int(os.environ["LC_PORT"])), H).serve_forever()
+PY

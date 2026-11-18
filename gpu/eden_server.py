@@ -143,7 +143,8 @@ CORS = {"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Con
 
 
 async def health(_req):
-    return web.json_response(state, headers=CORS)
+    env = os.path.exists(f"{LC}/env/.done")
+    return web.json_response({**state, "env": env, "light": bool(os.environ.get("LC_LIGHT"))}, headers=CORS)
 
 
 async def options(_req):
