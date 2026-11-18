@@ -41,10 +41,15 @@ def get_faceswap():
     return faceswap_engine
 
 # aiortc's default video bitrate (~1 Mbps) makes the stream blocky; give the encoder room.
-from aiortc.codecs import h264 as _h264, vp8 as _vp8
-for _c in (_h264, _vp8):
+import importlib
+for _mod in ("aiortc.codecs.h264", "aiortc.codecs.vpx", "aiortc.codecs.vp8"):   # module names differ across aiortc versions
+    try:
+        _c = importlib.import_module(_mod)
+    except ImportError:
+        continue
     for _name, _val in (("DEFAULT_BITRATE", 4_000_000), ("MIN_BITRATE", 1_500_000), ("MAX_BITRATE", 8_000_000)):
-        if hasattr(_c, _name): setattr(_c, _name, _val)
+        if hasattr(_c, _name):
+            setattr(_c, _name, _val)
 
 LC = os.environ.get("LC", "/workspace/lc")
 PORT = int(os.environ.get("LC_PORT", "8000"))

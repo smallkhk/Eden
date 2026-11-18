@@ -82,7 +82,6 @@ if ! python3 -c "import torch" 2>/dev/null && [[ -f "$LC/env/.done" && -f "$LC/e
   if [[ -s "$APTPK" ]]; then stage "installing saved system libraries"; apt_q update; apt_q install $(sort -u "$APTPK"); fi
   selftest() { (cd "$LC/app" && python3 -c "
 import torch, sageattention, av, aiohttp, aiortc, numpy, PIL, lightx2v
-from aiortc.codecs import h264, vp8
 import eden_server
 print('ok', torch.__version__, torch.cuda.is_available())" 2>&1 | tail -1); }
   ERR=$(selftest); tries=0
