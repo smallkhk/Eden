@@ -56,7 +56,7 @@ if [[ ! -f "$LC/setup.done" ]]; then
 fi
 
 # Light mode: small RunPod base image, Python + CUDA libs come from the volume snapshot.
-if ! python3 -c "import torch" 2>/dev/null && [[ -f "$LC/env/.done" && -f "$LC/env/cuda/.done" ]]; then
+if ! python3 -c "import torch" 2>/dev/null && [[ -f "$LC/env/.done" && -f "$LC/env/cuda/.done" && -f "$LC/env/.v2" ]]; then
   export LC_LIGHT=1
   PY312=$(command -v python3.12 || true)
   if [[ -z "$PY312" ]]; then stage "load failed: light image has no python3.12"; wait $STATUS_PID; exit 1; fi
@@ -102,6 +102,43 @@ if [[ ! -f "$LC/env/.done" ]]; then
   echo "$SITE" > "$LC/env/.done" && echo ">>> environment saved ($(du -sh "$LC/env" | cut -f1))" \
   || { echo "warn: env snapshot failed"; rm -rf "$LC/env"; }
 fi
+  # v2: packages installed outside site-packages (e.g. sageattention as a develop install)
+  # are linked via .pth/.egg-link - copy those folders onto the volume and repoint the links.
+  if [[ -f "$LC/env/.done" && ! -f "$LC/env/.v2" ]]; then
+    stage "saving extra packages to volume (one time)"
+    rm -rf "$LC/pip-cache"   # free space on the volume
+    python3 - "$LC/env" <<'PY' && date > "$LC/env/.v2" || echo "warn: extra package copy failed"
+import os, sys, shutil, importlib.util
+env = sys.argv[1]; site = os.path.join(env, "site"); extra = os.path.join(env, "extra")
+os.makedirs(extra, exist_ok=True)
+SITES = ("/usr/local/lib/python3.12/dist-packages", "/usr/lib/python3/dist-packages", "/workspace")
+def outside(p): return os.path.isabs(p) and not p.startswith(SITES)
+def move(path):
+    path = path.rstrip("/")
+    if not (outside(path) and os.path.isdir(path)): return path
+    dest = os.path.join(extra, path.strip("/").replace("/", "__"))
+    if not os.path.exists(dest):
+        shutil.copytree(path, dest, symlinks=True, ignore=shutil.ignore_patterns(".git"))
+        print("copied", path)
+    return dest
+for name in os.listdir(site):
+    if name.endswith((".pth", ".egg-link")):
+        f = os.path.join(site, name); lines = open(f).read().splitlines()
+        new = [l if (not l.strip() or l.startswith("import")) else move(l.strip()) for l in lines]
+        if new != lines: open(f, "w").write("\n".join(new) + "\n")
+for mod in ("sageattention", "flashinfer", "sgl_kernel", "lightx2v_kernel", "triton", "comfy_kitchen"):
+    spec = importlib.util.find_spec(mod)
+    if not spec or not spec.origin: print("not installed:", mod); continue
+    pkg = os.path.dirname(spec.origin) if spec.origin.endswith("__init__.py") else spec.origin
+    if outside(pkg):
+        dest = os.path.join(site, os.path.basename(pkg))
+        if not os.path.exists(dest):
+            (shutil.copytree if os.path.isdir(pkg) else shutil.copy2)(pkg, dest)
+            print("copied module", mod, "from", pkg)
+    print("ok", mod)
+PY
+    du -sh "$LC/env" 2>/dev/null
+  fi
 fi
 
 # 4. TURN relay: browsers reach the pod's WebRTC through TCP 3478.
