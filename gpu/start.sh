@@ -42,8 +42,16 @@ STATUS_PID=$!
 
 # 1. Latest server code from GitHub (keep the cached copy if GitHub is down).
 stage "fetching code"
+# raw.githubusercontent.com is CDN-cached for minutes; the contents API serves the latest commit.
+API_URL=$(echo "$LC_CODE_URL" | sed -nE 's#^https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.*)$#https://api.github.com/repos/\1/\2/contents/\4|\3#p')
+fetch() {   # fetch <file> <dest>
+  if [[ -n "$API_URL" ]]; then
+    curl -fsSL -H "Accept: application/vnd.github.raw" "${API_URL%%|*}/$1?ref=${API_URL##*|}" -o "$2" && return 0
+  fi
+  curl -fsSL "$LC_CODE_URL/$1?nocache=$(date +%s)" -o "$2"
+}
 for f in setup.sh eden_server.py live_runner.py write_config.py faceswap.py; do
-  curl -fsSL "$LC_CODE_URL/$f" -o "$LC/app/$f.new" && mv "$LC/app/$f.new" "$LC/app/$f" || echo "warn: could not fetch $f, using cached copy"
+  fetch "$f" "$LC/app/$f.new" && mv "$LC/app/$f.new" "$LC/app/$f" || echo "warn: could not fetch $f, using cached copy"
 done
 
 # 2. One-time setup (models, conversion, FP8, kernels). Skipped once done.
