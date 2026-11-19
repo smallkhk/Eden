@@ -276,10 +276,10 @@ async def offer(req):
 
     def start_generation():
         mode = claims.get("mode")
-        eng = get_faceswap() if mode == "faceswap" else get_portrait() if mode == "portrait" else get_dfm() if mode == "dfm" else engine
-
         def work():
             try:
+                eng = get_faceswap() if mode == "faceswap" else get_portrait() if mode == "portrait" \
+                    else get_dfm() if mode == "dfm" else ensure_eden(send)
                 if mode == "dfm":
                     eng.run(live, claims.get("dfm") or "")
                 else:
@@ -377,8 +377,35 @@ async def reset_http(req):
     return web.json_response({"ok": True}, headers=CORS)
 
 
+EDEN_AT_START = os.environ.get("LC_EDEN_AT_START", "0") == "1"
+eden_lock = threading.Lock()
+
+
+def ensure_eden(note=None):
+    """Load Eden on first use (keeps GPU memory free and boots fast for the other engines)."""
+    global engine
+    with eden_lock:
+        if engine is not None:
+            return engine
+        if note:
+            note({"type": "note", "text": "Loading Eden 5B (first use, about 2-6 min)…"})
+        if not STUB:
+            subprocess.run(["bash", os.path.join(os.path.dirname(os.path.abspath(__file__)), "build_fp8.sh")], check=False)
+            subprocess.run(["python3", os.path.join(os.path.dirname(os.path.abspath(__file__)), "write_config.py")], check=True)
+            state["profile"] = open(f"{LC}/profile.txt").read().strip()
+        eng = (StubEngine if STUB else EdenEngine)(lambda s: print("eden:", s, flush=True))
+        eng.load()
+        engine = eng
+        return engine
+
+
 def load_engine():
     global engine
+    if not EDEN_AT_START:
+        state["profile"] = "eden loads on first use"
+        state["ready"] = True
+        set_stage("ready")
+        return
     try:
         if not STUB:
             set_stage("writing config")
