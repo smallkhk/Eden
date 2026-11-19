@@ -85,6 +85,7 @@ const DEFAULTS = {
   gpu_image: "lightx2v/lightx2v:26062001-cu130-5090-fix-260921",
   gpu_image_light: "runpod/base:1.0.2-ubuntu2404", gpu_boot: "light",
   gpu_mode: "lite", gpu_wait_minutes: "60", gpu_lite_storage: "none", gpu_lite_cloud: "SECURE", gpu_lite_datacenter: "EU-RO-1", gpu_lite_volume_gb: "30",
+  gpu_lite_regions: "AFRICA,EUROPE",       // keep the GPU near Nigeria (Africa if RunPod has one, else Europe)
   gpu_lite_types: "NVIDIA RTX A5000",   // fixed card; Start keeps retrying until one is free
   gpu_code_url: "https://raw.githubusercontent.com/smallkhk/Eden/main/gpu",
   gpu_secret: "", gpu_volume_id: "", gpu_pod_id: "",
