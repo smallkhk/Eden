@@ -201,6 +201,19 @@ np.save('$LC/dlc/models/emap.npy', numpy_helper.to_array(m.graph.initializer[-1]
 print('emap saved')" || ok=0
   [[ $ok == 1 ]] && date > "$LC/dlc/.done" || echo "warn: face swap install failed - Eden still works"
 fi
+# HyperSwap 256 (sharper than the 128 inswapper). One time, ~800 MB.
+if [[ ! -f "$LC/dlc/.hyperswap" ]]; then
+  stage "downloading HyperSwap 256 (one time)"
+  mkdir -p "$LC/dlc/models"; hok=1
+  for v in 1a 1c; do
+    out="$LC/dlc/models/hyperswap_${v}_256.onnx"
+    if [[ ! -s "$out" ]]; then
+      if curl -fsSL --retry 3 -o "$out.part" "https://huggingface.co/facefusion/models-3.3.0/resolve/main/hyperswap_${v}_256.onnx"; then mv -f "$out.part" "$out"; else hok=0; fi
+    fi
+  done
+  [[ $hok == 1 ]] && date > "$LC/dlc/.hyperswap" || echo "warn: HyperSwap download failed - face swap falls back to inswapper"
+fi
+[[ -s "$LC/dlc/models/hyperswap_1a_256.onnx" ]] || export LC_SWAP_MODEL=inswapper_128_fp16
 export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$LC/dlc/pkgs"
 
 # 4. TURN relay: browsers reach the pod's WebRTC through TCP 3478.

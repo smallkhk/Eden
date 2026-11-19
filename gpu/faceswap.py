@@ -66,18 +66,26 @@ def _align(kps, template, size):
     return _umeyama(kps.astype(np.float64), dst.astype(np.float64))
 
 
+SWAP_MODEL = os.environ.get("LC_SWAP_MODEL", "hyperswap_1a_256")   # or hyperswap_1c_256 / inswapper_128_fp16
+
+
 class FaceSwapper:
-    def __init__(self, providers=None, enhance=True):
+    def __init__(self, providers=None, enhance=None, model=None):
         providers = providers or [("CUDAExecutionProvider", {"cudnn_conv_algo_search": "HEURISTIC"}), "CPUExecutionProvider"]
+        self.model = model or SWAP_MODEL
+        self.hyper = self.model.startswith("hyperswap")
+        if enhance is None:
+            enhance = not self.hyper          # HyperSwap is sharp on its own; GFPGAN only helps the 128 inswapper
         self.det = _session("det_10g.onnx", providers)
         self.rec = _session("w600k_r50.onnx", providers)
-        self.swap = _session("inswapper_128_fp16.onnx", providers)
+        self.swap = _session(self.model + ".onnx", providers)
         self.gfp = _session("GFPGANv1.4.onnx", providers) if enhance else None
-        self.emap = np.load(os.path.join(MODELS, "emap.npy")).astype(np.float32)
+        self.emap = None if self.hyper else np.load(os.path.join(MODELS, "emap.npy")).astype(np.float32)
         self.enhance = enhance
-        self.source = None          # (1, 512) inswapper latent of the character
+        self.source = None          # (1, 512): normed ArcFace (HyperSwap) or inswapper latent
         self._centers = {}
         self._mask128 = self._feather(128, 0.1)
+        self._mask256 = self._feather(256, 0.06)
         self._mask512 = self._feather(512, 0.1)
 
     # ---------- detection (SCRFD) ----------
@@ -130,8 +138,11 @@ class FaceSwapper:
         blob = ((face.astype(np.float32) - 127.5) / 127.5).transpose(2, 0, 1)[None]
         emb = self.rec.run(None, {self.rec.get_inputs()[0].name: blob})[0].reshape(1, -1)
         emb = emb / np.linalg.norm(emb)
-        latent = emb @ self.emap
-        self.source = (latent / np.linalg.norm(latent)).astype(np.float32)
+        if self.hyper:
+            self.source = emb.astype(np.float32)
+        else:
+            latent = emb @ self.emap
+            self.source = (latent / np.linalg.norm(latent)).astype(np.float32)
         return True
 
     # ---------- swap ----------
@@ -164,12 +175,22 @@ class FaceSwapper:
             return frame
         faces = self.detect(frame)[:max_faces]
         for _box, kps, _score in faces:
-            M = _align(kps, ARCFACE_112, 128)
-            crop = cv2.warpAffine(frame, M, (128, 128), borderValue=0.0)
-            blob = (crop.astype(np.float32) / 255.0).transpose(2, 0, 1)[None]
-            pred = self.swap.run(None, {"target": blob, "source": self.source})[0][0]
-            fake = (pred.transpose(1, 2, 0) * 255).clip(0, 255).astype(np.uint8)
-            frame = self._paste(frame, fake, M, self._mask128)
+            if self.hyper:
+                M = _align(kps, ARCFACE_112, 256)          # facefusion "arcface_128" template at 256 px
+                crop = cv2.warpAffine(frame, M, (256, 256), borderMode=cv2.BORDER_REPLICATE)
+                blob = ((crop.astype(np.float32) / 255.0 - 0.5) / 0.5).transpose(2, 0, 1)[None]
+                pred, pmask = self.swap.run(None, {"target": blob, "source": self.source})
+                fake = ((pred[0].transpose(1, 2, 0) * 0.5 + 0.5) * 255).clip(0, 255).astype(np.uint8)
+                mask = np.clip(pmask[0, 0], 0, 1).astype(np.float32)
+                mask = cv2.GaussianBlur(mask, (0, 0), 3) * self._mask256      # soft edges, model's own face mask
+                frame = self._paste(frame, fake, M, mask)
+            else:
+                M = _align(kps, ARCFACE_112, 128)
+                crop = cv2.warpAffine(frame, M, (128, 128), borderValue=0.0)
+                blob = (crop.astype(np.float32) / 255.0).transpose(2, 0, 1)[None]
+                pred = self.swap.run(None, {"target": blob, "source": self.source})[0][0]
+                fake = (pred.transpose(1, 2, 0) * 255).clip(0, 255).astype(np.uint8)
+                frame = self._paste(frame, fake, M, self._mask128)
             if self.gfp is not None and self.enhance:
                 M5 = _align(kps, FFHQ_512, 512)
                 crop = cv2.warpAffine(frame, M5, (512, 512), borderMode=cv2.BORDER_REPLICATE)
