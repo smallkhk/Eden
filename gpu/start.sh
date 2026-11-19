@@ -50,7 +50,7 @@ fetch() {   # fetch <file> <dest>
   fi
   curl -fsSL "$LC_CODE_URL/$1?nocache=$(date +%s)" -o "$2"
 }
-for f in setup.sh eden_server.py live_runner.py write_config.py faceswap.py; do
+for f in setup.sh eden_server.py live_runner.py write_config.py faceswap.py liveportrait.py; do
   fetch "$f" "$LC/app/$f.new" && mv "$LC/app/$f.new" "$LC/app/$f" || echo "warn: could not fetch $f, using cached copy"
 done
 
@@ -214,6 +214,23 @@ if [[ ! -f "$LC/dlc/.hyperswap" ]]; then
   [[ $hok == 1 ]] && date > "$LC/dlc/.hyperswap" || echo "warn: HyperSwap download failed - face swap falls back to inswapper"
 fi
 [[ -s "$LC/dlc/models/hyperswap_1a_256.onnx" ]] || export LC_SWAP_MODEL=inswapper_128_fp16
+# Live Portrait (KwaiVGI): code at a pinned commit + weights (~500 MB). One time.
+if [[ ! -f "$LC/lp/.done" ]]; then
+  stage "installing Live Portrait (one time, ~2 min)"
+  lok=1
+  if [[ ! -d "$LC/lp/src" ]]; then
+    rm -rf "$LC/lp" && git clone -q https://github.com/KwaiVGI/LivePortrait "$LC/lp" && git -C "$LC/lp" checkout -q 9b294b3d0536135442ea73cb01e6cb3ca7029dd3 || lok=0
+  fi
+  LPW="$LC/lp/pretrained_weights/liveportrait"; mkdir -p "$LPW/base_models" "$LPW/retargeting_models"
+  for f in base_models/appearance_feature_extractor.pth base_models/motion_extractor.pth base_models/spade_generator.pth \
+           base_models/warping_module.pth retargeting_models/stitching_retargeting_module.pth; do
+    if [[ ! -s "$LPW/$f" ]]; then
+      if curl -fsSL --retry 3 -o "$LPW/$f.part" "https://huggingface.co/KwaiVGI/LivePortrait/resolve/main/liveportrait/$f"; then mv -f "$LPW/$f.part" "$LPW/$f"; else lok=0; fi
+    fi
+  done
+  python3 -c "import scipy, yaml" 2>/dev/null || python3 -m pip install -q --target "$LC/dlc/pkgs" scipy pyyaml || lok=0
+  [[ $lok == 1 ]] && date > "$LC/lp/.done" || echo "warn: Live Portrait install failed - Eden and face swap still work"
+fi
 export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$LC/dlc/pkgs"
 
 # 4. TURN relay: browsers reach the pod's WebRTC through TCP 3478.

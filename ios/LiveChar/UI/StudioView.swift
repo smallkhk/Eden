@@ -170,11 +170,25 @@ struct StudioView: View {
 
             Card {
                 Text("ENGINE").font(.caption.weight(.bold)).foregroundStyle(Theme.dim)
-                Picker("Engine", selection: Binding(get: { live.engineID }, set: { live.engineID = $0 })) {
-                    ForEach(EngineDef.all) { e in Text(e.label).tag(e.id) }
+                // Scrollable chips: six engines no longer fit a segmented control on a phone.
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(EngineDef.all) { e in
+                            let on = live.engineID == e.id
+                            Button { live.engineID = e.id } label: {
+                                Text(e.label)
+                                    .font(.subheadline.weight(on ? .semibold : .regular))
+                                    .foregroundStyle(on ? Color.white : Theme.dim)
+                                    .padding(.horizontal, 14).padding(.vertical, 9)
+                                    .background(on ? Color.white.opacity(0.18) : Theme.well, in: Capsule())
+                                    .overlay(Capsule().stroke(on ? Color.white.opacity(0.35) : Theme.line))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                 }
-                .pickerStyle(.segmented)
                 .disabled(live.running || live.starting || live.source == .videoFile)
+                .opacity((live.running || live.starting || live.source == .videoFile) ? 0.6 : 1)
                 HStack {
                     Text(live.source == .videoFile ? "Off while playing a video file" : engineLine).font(.footnote).foregroundStyle(Theme.dim)
                     Spacer()

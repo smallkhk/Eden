@@ -33,6 +33,17 @@ from live_runner import FPS, H, W, EdenEngine, LiveSession, StubEngine
 faceswap_engine = None          # loaded on the first face-swap session (keeps Eden-only VRAM low)
 
 
+portrait_engine = None
+
+
+def get_portrait():
+    global portrait_engine
+    if portrait_engine is None:
+        from liveportrait import PortraitEngine
+        portrait_engine = PortraitEngine(W, H)
+    return portrait_engine
+
+
 def get_faceswap():
     global faceswap_engine
     if faceswap_engine is None:
@@ -217,7 +228,8 @@ async def offer(req):
         pcs.discard(pc)
 
     def start_generation():
-        eng = get_faceswap() if claims.get("mode") == "faceswap" else engine
+        mode = claims.get("mode")
+        eng = get_faceswap() if mode == "faceswap" else get_portrait() if mode == "portrait" else engine
 
         def work():
             try:
@@ -233,7 +245,7 @@ async def offer(req):
     async def stats_loop():
         while not live.ended:
             await asyncio.sleep(2)
-            send({"type": "stats", "generation_fps": round(live.fps, 1) if live.fps else None, "profile": "faceswap" if claims.get("mode") == "faceswap" else state["profile"]})
+            send({"type": "stats", "generation_fps": round(live.fps, 1) if live.fps else None, "profile": claims.get("mode") if claims.get("mode") in ("faceswap", "portrait") else state["profile"]})
 
     async def reset(m):
         if m.get("prompt"):

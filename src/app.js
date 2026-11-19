@@ -28,6 +28,7 @@ const ENGINES = {
   "eden-14b": { label: "Eden Live 14B", kind: "eden", endpoint: "vast/eden-live-14b-video", w: 832,  h: 480, fps: 16, price: 0.01 },
   "eden-gpu": { label: "Eden 5B (own GPU)", kind: "edengpu", w: 704, h: 1280, fps: 24 },
   "dlc-gpu":  { label: "Face swap (own GPU)", kind: "edengpu", w: 704, h: 1280, fps: 24, faceswap: true },
+  "lp-gpu":   { label: "Live Portrait (own GPU)", kind: "edengpu", w: 704, h: 1280, fps: 24, faceswap: true },
 };
 
 const LUCY_SWAP = "Substitute the character in the video with the person in the reference image.";
@@ -756,7 +757,7 @@ ui.au.addEventListener("keydown", (e) => e.key === "Enter" && ui.pw.focus());
 ui.authSwap.addEventListener("click", () => { ui.pwErr.textContent = ""; showAuth(authMode === "register" ? "login" : "register"); });
 ui.logout.addEventListener("click", async () => { await stopAll(); await api("/api/logout", {}).catch(() => {}); location.reload(); });
 
-const LABELS = { lucy: "Decart Lucy — 720p, fastest", "eden-5b": "Eden Live 5B — 720p @ 24fps", "eden-14b": "Eden Live 14B — 480p @ 16fps", "eden-gpu": "Eden 5B — own GPU", "dlc-gpu": "Face swap (Deep-Live-Cam) — own GPU" };
+const LABELS = { lucy: "Decart Lucy — 720p, fastest", "eden-5b": "Eden Live 5B — 720p @ 24fps", "eden-14b": "Eden Live 14B — 480p @ 16fps", "eden-gpu": "Eden 5B — own GPU", "dlc-gpu": "Face swap (Deep-Live-Cam) — own GPU", "lp-gpu": "Live Portrait — own GPU" };
 async function boot() {
   cfg = await api("/api/config");
   if (!cfg.user) { ui.userBox.hidden = true; showAuth(cfg.hasUsers ? "login" : "register"); return; }

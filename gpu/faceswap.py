@@ -66,29 +66,14 @@ def _align(kps, template, size):
     return _umeyama(kps.astype(np.float64), dst.astype(np.float64))
 
 
-SWAP_MODEL = os.environ.get("LC_SWAP_MODEL", "hyperswap_1a_256")   # or hyperswap_1c_256 / inswapper_128_fp16
+class Detector:
+    """SCRFD (det_10g) face detector: returns [(box, 5 keypoints, score)], biggest face first."""
 
-
-class FaceSwapper:
-    def __init__(self, providers=None, enhance=None, model=None):
+    def __init__(self, providers=None):
         providers = providers or [("CUDAExecutionProvider", {"cudnn_conv_algo_search": "HEURISTIC"}), "CPUExecutionProvider"]
-        self.model = model or SWAP_MODEL
-        self.hyper = self.model.startswith("hyperswap")
-        if enhance is None:
-            enhance = not self.hyper          # HyperSwap is sharp on its own; GFPGAN only helps the 128 inswapper
         self.det = _session("det_10g.onnx", providers)
-        self.rec = _session("w600k_r50.onnx", providers)
-        self.swap = _session(self.model + ".onnx", providers)
-        self.gfp = _session("GFPGANv1.4.onnx", providers) if enhance else None
-        self.emap = None if self.hyper else np.load(os.path.join(MODELS, "emap.npy")).astype(np.float32)
-        self.enhance = enhance
-        self.source = None          # (1, 512): normed ArcFace (HyperSwap) or inswapper latent
         self._centers = {}
-        self._mask128 = self._feather(128, 0.1)
-        self._mask256 = self._feather(256, 0.06)
-        self._mask512 = self._feather(512, 0.1)
 
-    # ---------- detection (SCRFD) ----------
     def detect(self, img, size=640, thresh=0.5):
         h, w = img.shape[:2]
         scale = size / max(h, w)
@@ -126,6 +111,32 @@ class FaceSwapper:
         faces = [(boxes[i], kpss[i], float(scores[i])) for i in idx]
         faces.sort(key=lambda f: (f[0][2] - f[0][0]) * (f[0][3] - f[0][1]), reverse=True)   # biggest first
         return faces
+
+
+
+SWAP_MODEL = os.environ.get("LC_SWAP_MODEL", "hyperswap_1a_256")   # or hyperswap_1c_256 / inswapper_128_fp16
+
+
+class FaceSwapper:
+    def __init__(self, providers=None, enhance=None, model=None):
+        providers = providers or [("CUDAExecutionProvider", {"cudnn_conv_algo_search": "HEURISTIC"}), "CPUExecutionProvider"]
+        self.model = model or SWAP_MODEL
+        self.hyper = self.model.startswith("hyperswap")
+        if enhance is None:
+            enhance = not self.hyper          # HyperSwap is sharp on its own; GFPGAN only helps the 128 inswapper
+        self.detector = Detector(providers)
+        self.rec = _session("w600k_r50.onnx", providers)
+        self.swap = _session(self.model + ".onnx", providers)
+        self.gfp = _session("GFPGANv1.4.onnx", providers) if enhance else None
+        self.emap = None if self.hyper else np.load(os.path.join(MODELS, "emap.npy")).astype(np.float32)
+        self.enhance = enhance
+        self.source = None          # (1, 512): normed ArcFace (HyperSwap) or inswapper latent
+        self._mask128 = self._feather(128, 0.1)
+        self._mask256 = self._feather(256, 0.06)
+        self._mask512 = self._feather(512, 0.1)
+
+    def detect(self, img, size=640, thresh=0.5):
+        return self.detector.detect(img, size, thresh)
 
     # ---------- identity ----------
     def set_source(self, img):
