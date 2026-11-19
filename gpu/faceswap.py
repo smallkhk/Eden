@@ -138,7 +138,8 @@ class Smoother:
         self.prev = None
 
 
-SWAP_MODEL = os.environ.get("LC_SWAP_MODEL", "hyperswap_1a_256")   # or hyperswap_1c_256 / inswapper_128_fp16
+SWAP_MODEL = os.environ.get("LC_SWAP_MODEL", "inswapper_128_fp16")   # Deep-Live-Cam default; or hyperswap_1a_256 / 1c
+SWAP_ENHANCE = os.environ.get("LC_SWAP_ENHANCE", "0") == "1"           # Deep-Live-Cam "Face Enhancer" (GFPGAN), off by default
 
 
 class FaceSwapper:
@@ -147,7 +148,7 @@ class FaceSwapper:
         self.model = model or SWAP_MODEL
         self.hyper = self.model.startswith("hyperswap")
         if enhance is None:
-            enhance = not self.hyper          # HyperSwap is sharp on its own; GFPGAN only helps the 128 inswapper
+            enhance = SWAP_ENHANCE
         self.detector = Detector(providers)
         self.rec = _session("w600k_r50.onnx", providers)
         self.swap = _session(self.model + ".onnx", providers)
@@ -205,6 +206,28 @@ class FaceSwapper:
         out[y0:y1, x0:x1] = (roi * (1 - mm) + warped[y0:y1, x0:x1].astype(np.float32) * mm).astype(np.uint8)
         return out
 
+    @staticmethod
+    def _paste_dlc(frame, face, M):
+        """insightface inswapper paste_back - exactly what Deep-Live-Cam does."""
+        h, w = frame.shape[:2]
+        IM = cv2.invertAffineTransform(M)
+        warped = cv2.warpAffine(face, IM, (w, h), borderValue=0.0)
+        white = cv2.warpAffine(np.full(face.shape[:2], 255, np.float32), IM, (w, h), borderValue=0.0)
+        white[white > 20] = 255
+        ys, xs = np.where(white == 255)
+        if not len(ys):
+            return frame
+        size = int(np.sqrt((ys.max() - ys.min()) * (xs.max() - xs.min())))
+        k = max(size // 10, 10)
+        mask = cv2.erode(white, np.ones((k, k), np.uint8), iterations=1)
+        k = max(size // 20, 5)
+        mask = cv2.GaussianBlur(mask, (2 * k + 1, 2 * k + 1), 0)[..., None] / 255.0
+        y0, y1, x0, x1 = max(ys.min() - 2, 0), ys.max() + 3, max(xs.min() - 2, 0), xs.max() + 3
+        out = frame.copy()
+        m = mask[y0:y1, x0:x1]
+        out[y0:y1, x0:x1] = (m * warped[y0:y1, x0:x1] + (1 - m) * frame[y0:y1, x0:x1]).astype(np.uint8)
+        return out
+
     def process(self, frame, max_faces=1):
         if self.source is None:
             return frame
@@ -232,7 +255,7 @@ class FaceSwapper:
                 blob = (crop.astype(np.float32) / 255.0).transpose(2, 0, 1)[None]
                 pred = self.swap.run(None, {"target": blob, "source": self.source})[0][0]
                 fake = (pred.transpose(1, 2, 0) * 255).clip(0, 255).astype(np.uint8)
-                frame = self._paste(frame, fake, M, self._mask128)
+                frame = self._paste_dlc(frame, fake, M)
             if self.gfp is not None and self.enhance:
                 M5 = _align(kps, FFHQ_512, 512)
                 crop = cv2.warpAffine(frame, M5, (512, 512), borderMode=cv2.BORDER_REPLICATE)

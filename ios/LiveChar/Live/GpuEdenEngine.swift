@@ -82,7 +82,18 @@ final class GpuEdenEngine: NSObject, LiveEngine, LKRTCPeerConnectionDelegate, LK
         let tinit = LKRTCRtpTransceiverInit()
         tinit.direction = .sendRecv
         tinit.streamIds = ["livechar"]
-        _ = pc.addTransceiver(with: track, init: tinit)
+        // Send the camera at full quality: high bitrate floor, never shrink the picture to save bandwidth.
+        let enc = LKRTCRtpEncodingParameters()
+        enc.isActive = true
+        enc.maxBitrateBps = NSNumber(value: 6_000_000)
+        enc.minBitrateBps = NSNumber(value: 2_000_000)
+        enc.maxFramerate = NSNumber(value: 30)
+        tinit.sendEncodings = [enc]
+        if let tr = pc.addTransceiver(with: track, init: tinit) {
+            let p = tr.sender.parameters
+            p.degradationPreference = NSNumber(value: LKRTCDegradationPreference.maintainResolution.rawValue)
+            tr.sender.parameters = p
+        }
 
         let dcConfig = LKRTCDataChannelConfiguration()
         dcConfig.isOrdered = true

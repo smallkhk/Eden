@@ -54,14 +54,14 @@ done
 # 2. Python packages onto the volume (one time, ~3 min). ONNX Runtime GPU for CUDA 12 runs on
 #    every current RunPod driver; its CUDA/cuDNN libraries come as pip packages.
 PYENV="$LC/pyenv"
-if [[ ! -f "$PYENV/.v1" ]]; then
+if [[ ! -f "$PYENV/.v2" ]]; then
   stage "installing packages (one time, ~3 min)"
   "$PY" -m pip --version >/dev/null 2>&1 || curl -fsSL https://bootstrap.pypa.io/get-pip.py | "$PY" - -q --break-system-packages \
     || fail "could not install pip"
   rm -rf "$PYENV"
   "$PY" -m pip install -q --break-system-packages --target "$PYENV" \
-      "onnxruntime-gpu[cuda,cudnn]==1.22.0" "numpy<2.3" opencv-python-headless aiortc aiohttp av pillow \
-    && date > "$PYENV/.v1" || fail "package install failed"
+      "onnxruntime-gpu[cuda,cudnn]==1.22.0" "numpy<2.3" opencv-python-headless aiortc aiohttp av pillow onnx \
+    && date > "$PYENV/.v2" || fail "package install failed"
 fi
 export PYTHONPATH="$PYENV"
 for d in "$PYENV"/nvidia/*/lib; do export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$d"; done
@@ -78,7 +78,15 @@ get "$M/det_10g.onnx"        "$HFB/buffalo_l/buffalo_l/det_10g.onnx"   || fail "
 get "$M/w600k_r50.onnx"      "$HFB/buffalo_l/buffalo_l/w600k_r50.onnx" || fail "model download failed (w600k_r50)"
 get "$M/2d106det.onnx"       "$HFB/buffalo_l/buffalo_l/2d106det.onnx"  || fail "model download failed (2d106det)"
 get "$M/GFPGANv1.4.onnx"     "$HFB/GFPGANv1.4.onnx"                     || fail "model download failed (GFPGAN)"
-for v in 1a 1c; do
+get "$M/inswapper_128_fp16.onnx" "$HFB/inswapper_128_fp16.onnx"    || fail "model download failed (inswapper)"
+if [[ ! -s "$M/emap.npy" ]]; then
+  "$PY" -c "
+import onnx, numpy as np
+from onnx import numpy_helper
+m = onnx.load('$M/inswapper_128_fp16.onnx')
+np.save('$M/emap.npy', numpy_helper.to_array(m.graph.initializer[-1]).astype('float32'))" || fail "emap extract failed"
+fi
+for v in 1a; do
   get "$M/hyperswap_${v}_256.onnx" "https://huggingface.co/facefusion/models-3.3.0/resolve/main/hyperswap_${v}_256.onnx" \
     || fail "model download failed (hyperswap $v)"
 done
