@@ -51,6 +51,14 @@ def get_faceswap():
         faceswap_engine = FaceSwapEngine()
     return faceswap_engine
 
+
+def get_swapper():
+    """One shared HyperSwap swapper for Face swap and Eden's face lock (models load once)."""
+    eng = get_faceswap()
+    with eng.lock:
+        eng.load()
+    return eng.fs
+
 # aiortc's default video bitrate (~1 Mbps) makes the stream blocky; give the encoder room.
 import importlib
 for _mod in ("aiortc.codecs.h264", "aiortc.codecs.vpx", "aiortc.codecs.vp8"):   # module names differ across aiortc versions
@@ -217,15 +225,30 @@ async def offer(req):
         loop.call_soon_threadsafe(_s)
 
     live = LiveSession(claims.get("max", 300), out.push, send)
+    lock = None
+    if claims.get("mode", "eden") == "eden":
+        from faceswap import FaceLock
+        lock = FaceLock(get_swapper, out.push)      # face lock: exact face from the reference photo
+        live.on_frames = lock.frames
     live.fps = None
     # big images (data URLs) come over HTTP, not the data channel (~256 KB message limit)
     initial = {"image": body.get("image"), "prompt": body.get("prompt")}
+    face_path = None
+    if lock and isinstance(body.get("face_image"), str) and body["face_image"].startswith("data:image/"):
+        try:
+            face_path = f"{LC}/face_{claims.get('sid', 'x')}.jpg"
+            Image.open(io.BytesIO(base64.b64decode(body["face_image"].split(",", 1)[1]))).convert("RGB").save(face_path, quality=95)
+        except Exception as e:
+            print("face image failed:", e, flush=True)
+            face_path = None
     gen = {"thread": None, "closing": False}
 
     async def finish():
         if gen["closing"]:
             return
         gen["closing"] = True
+        if lock:
+            lock.close()
         if active.get("finish") is finish:
             active["finish"] = None
         live.ended = True
@@ -264,6 +287,8 @@ async def offer(req):
         if m.get("prompt"):
             live.prompt = str(m["prompt"]).strip()[:1500]
         live.cover_path = await load_cover(m, live)
+        if lock:
+            lock.set_cover(live.cover_path if (m.get("image_url") or m.get("image")) else None)
         live.restart = True
         live.feed.interrupt()
 
@@ -288,10 +313,16 @@ async def offer(req):
                         m["image"] = initial["image"]
                     live.prompt = (m.get("prompt") or initial["prompt"] or "").strip() or live.prompt
                     live.cover_path = await load_cover(m, live)
+                    if lock:
+                        lock.enabled = m.get("face_lock", True) is not False
+                        lock.set_cover(face_path or (live.cover_path if (m.get("image_url") or m.get("image")) else None))
                     start_generation()
                     send({"type": "configured"})
                     asyncio.ensure_future(stats_loop())
                 asyncio.ensure_future(go())
+            elif t == "options" and lock is not None:
+                if "face_lock" in m:
+                    lock.enabled = bool(m["face_lock"])
             elif t == "prompt" and m.get("prompt"):
                 live.prompt = str(m["prompt"]).strip()[:1500]
             elif t == "reset":

@@ -192,6 +192,10 @@ struct StudioView: View {
                 HStack {
                     Text(live.source == .videoFile ? "Off while playing a video file" : engineLine).font(.footnote).foregroundStyle(Theme.dim)
                     Spacer()
+                    if live.engineDef.id == "eden-gpu" {
+                        Toggle("Face lock", isOn: Binding(get: { live.faceLock }, set: { live.setFaceLock($0) }))
+                            .toggleStyle(.switch).fixedSize()
+                    }
                     if live.engineDef.kind == .lucy {
                         Picker("", selection: Binding(get: { live.portrait }, set: { live.portrait = $0 })) {
                             Image(systemName: "rectangle.portrait").tag(true)

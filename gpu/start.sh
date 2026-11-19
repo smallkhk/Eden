@@ -113,8 +113,8 @@ fi
 if [[ -f "$LC/setup.done" ]]; then
   rm -rf "$LC/pip-cache" "$LC/hf-home" "$LC/cutlass" "$LC/env/extra" "$LC/models/EdenLive" 2>/dev/null
   find "$LC/logs" -name '*.log' -size +20M -delete 2>/dev/null
-  # FP8 copies are only used with LC_PROFILE=fp8; BF16 is the default, so free ~12 GB.
-  [[ "${LC_PROFILE:-bf16}" != "fp8" ]] && rm -rf "$LC/models/EdenLive-x2v/quantized" 2>/dev/null
+  # FP8 copies are the default profile; only drop them if BF16 is chosen explicitly.
+  [[ "${LC_PROFILE:-fp8}" == "bf16" ]] && rm -rf "$LC/models/EdenLive-x2v/quantized" 2>/dev/null
 fi
 
 if ! python3 -c "import torch" 2>/dev/null && [[ -z "${LC_LIGHT:-}" ]]; then
@@ -249,6 +249,18 @@ turnserver --listening-port 3478 --listening-ip "$PRIV_IP" --relay-ip "$PRIV_IP"
 stage "loading Eden 5B"
 kill $STATUS_PID 2>/dev/null; wait $STATUS_PID 2>/dev/null
 cd "$LC/app"
+# FP8 checkpoints (default profile). Rebuilt from the converted model if missing, a few minutes once.
+Q="$LC/models/EdenLive-x2v/quantized"
+if [[ "${LC_PROFILE:-fp8}" == "fp8" && ! -f "$Q/dit-5b-fp8-f16-accum-qmax14.safetensors" ]]; then
+  if python3 -c "from lightx2v.common.ops.mm.fp8_f16_accum import fp8_f16_accum_mm_available as a; import sys; sys.exit(0 if a() else 1)" 2>/dev/null; then
+    stage "building FP8 model (one time, ~5 min)"
+    ( cd "$LC/LightX2V" && EDEN_MODEL="$LC/models/EdenLive-x2v" QUANT_DEVICE=cuda:0 PYTHON_BIN=python3 \
+        bash scripts/edenlive/prepare_fp8_f16_accum_5090.sh ) >> "$LC/logs/fp8.log" 2>&1 || echo "warn: FP8 build failed - using BF16"
+  else
+    echo "warn: FP8 kernel unavailable - using BF16"
+  fi
+fi
+
 python3 eden_server.py 2>&1 | tee "$LC/logs/server.log"
 # The server only exits on a crash: report the last error line so the app shows it and stops the pod.
 LAST=$(grep -E "Error|error|Exception" "$LC/logs/server.log" | tail -1 | cut -c1-240)

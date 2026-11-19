@@ -259,3 +259,58 @@ class FaceSwapEngine:
                 times = times[-24:]
                 if len(times) > 1:
                     live.fps = (len(times) - 1) / (times[-1] - times[0])
+
+
+class FaceLock:
+    """Runs HyperSwap on Eden's output frames in its own thread so Eden is never slowed down.
+    Frames pass through untouched until the swapper is loaded and while no source face is set."""
+
+    def __init__(self, get_swapper, push):
+        import queue
+        self.get_swapper, self.push = get_swapper, push
+        self.q = queue.Queue(maxsize=3)
+        self.enabled = True
+        self.fs = None
+        self.cover = None
+        self.have_source = False
+        self.stop = False
+        self.t = threading.Thread(target=self._loop, name="lc-facelock", daemon=True)
+        self.t.start()
+
+    def frames(self, frames):
+        if not self.enabled:
+            return self.push(frames)
+        try:
+            self.q.put_nowait(frames)
+        except Exception:                 # behind: drop the oldest chunk to keep latency low
+            try:
+                self.q.get_nowait()
+            except Exception:
+                pass
+            self.q.put_nowait(frames)
+
+    def set_cover(self, path):
+        self.cover = path
+
+    def close(self):
+        self.stop = True
+        self.q.put(None)
+
+    def _loop(self):
+        loaded_for = None
+        while True:
+            frames = self.q.get()
+            if frames is None or self.stop:
+                return
+            try:
+                if self.fs is None:
+                    self.fs = self.get_swapper()
+                if self.cover != loaded_for:
+                    loaded_for = self.cover
+                    img = cv2.imread(self.cover or "", cv2.IMREAD_COLOR) if self.cover else None
+                    self.have_source = img is not None and self.fs.set_source(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                if self.enabled and self.have_source:
+                    frames = [self.fs.process(np.ascontiguousarray(f)) for f in frames]
+            except Exception as e:
+                print("face lock:", type(e).__name__, e, flush=True)
+            self.push(frames)

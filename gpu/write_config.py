@@ -24,8 +24,8 @@ def fp8_kernel_ok():
 def main():
     q = X2V / "quantized"
     fp8_files = [q / "dit-5b-fp8-f16-accum-qmax14.safetensors", q / "t5-fp8-f16-accum-qmax14.safetensors", q / "proxy-dino-int8-convrot.safetensors"]
-    # BF16 by default: sharper faces, ~12 fps. LC_PROFILE=fp8 for ~24 fps.
-    use_fp8 = os.environ.get("LC_PROFILE", "bf16") == "fp8" and all(f.exists() for f in fp8_files) and fp8_kernel_ok()
+    # FP8 by default: ~24 fps, holds the face through movement (face lock restores detail). LC_PROFILE=bf16 for ~12 fps.
+    use_fp8 = os.environ.get("LC_PROFILE", "fp8") == "fp8" and all(f.exists() for f in fp8_files) and fp8_kernel_ok()
     name = "wan22_5b_ar_fp8_f16_accum_sage_lighttae_async_5090.json" if use_fp8 else "wan22_5b_ar_bf16_sage_lighttae_async_5090.json"
     cfg = json.loads((PROFILES / name).read_text())
 

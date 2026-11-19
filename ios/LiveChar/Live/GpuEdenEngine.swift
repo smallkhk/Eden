@@ -43,6 +43,15 @@ final class GpuEdenEngine: NSObject, LiveEngine, LKRTCPeerConnectionDelegate, LK
     /// Returns the character "look" for an image: a fal URL (https://…) or a data URL (data:image/…).
     var buildLook: ((Data) async throws -> String)?
 
+    /// Eden face lock: HyperSwap the exact face from the original photo onto every Eden frame.
+    var faceLock = true
+    var faceImage: String?          // original reference photo (data URL) for the face lock
+
+    func setFaceLock(_ on: Bool) {
+        faceLock = on
+        sendControl(["type": "options", "face_lock": on])
+    }
+
     init(sessionID: String, events: EngineEvents) {
         self.sessionID = sessionID
         self.events = events
@@ -94,13 +103,14 @@ final class GpuEdenEngine: NSObject, LiveEngine, LKRTCPeerConnectionDelegate, LK
         events.state("negotiating…", false)
         var body: [String: Any] = ["sdp": local.sdp, "type": "offer", "token": ticket.token]
         if let look, look.hasPrefix("data:") { body["image"] = look }
+        if faceLock, let faceImage { body["face_image"] = faceImage }
         let answer = try await pod("/offer", body, timeout: 30)
         guard let sdp = answer["sdp"] as? String else { throw APIError(message: "GPU: no answer", status: 0) }
         try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
             pc.setRemoteDescription(LKRTCSessionDescription(type: .answer, sdp: sdp)) { err in if let err { c.resume(throwing: err) } else { c.resume() } }
         }
 
-        var cfg: [String: Any] = ["type": "configure"]
+        var cfg: [String: Any] = ["type": "configure", "face_lock": faceLock]
         let text = prompt.isEmpty ? (look != nil ? EdenEngine.swapPrompt : "") : prompt
         if !text.isEmpty { cfg["prompt"] = text }
         if let look, !look.hasPrefix("data:") { cfg["image_url"] = look }

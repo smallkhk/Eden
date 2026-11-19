@@ -66,6 +66,11 @@ final class LiveController: ObservableObject {
     @AppStorage("lc.engine") var engineID = "lucy" { willSet { objectWillChange.send() } }
     @AppStorage("lc.portrait") var portrait = true { willSet { objectWillChange.send() } }
     @AppStorage("lc.enhance") var enhance = true { willSet { objectWillChange.send() } }
+    @AppStorage("lc.faceLock") var faceLock = true { willSet { objectWillChange.send() } }
+    func setFaceLock(_ on: Bool) {
+        faceLock = on
+        (engine as? GpuEdenEngine)?.setFaceLock(on)
+    }
     @AppStorage("lc.mirror") var mirror = true { willSet { objectWillChange.send() } }
     @AppStorage("lc.share") var shareOn = false { willSet { objectWillChange.send() } }
     @AppStorage("lc.backCamera") var backCamera = false { willSet { objectWillChange.send() } }
@@ -230,6 +235,12 @@ final class LiveController: ObservableObject {
                     return "data:image/jpeg;base64," + img.base64EncodedString()
                 }
                 eng.buildLook = look
+                if def.id == "eden-gpu", let refData {
+                    eng.faceLock = faceLock
+                    eng.faceImage = "data:image/jpeg;base64," + refData.base64EncodedString()
+                } else {
+                    eng.faceLock = false
+                }
                 engine = eng; router.engine = eng
                 var first: String?
                 if let refData { first = try await look(refData) }
