@@ -84,8 +84,8 @@ const DEFAULTS = {
   gpu_type: "NVIDIA GeForce RTX 5090", gpu_datacenter: "EUR-IS-1", gpu_cloud: "SECURE",
   gpu_image: "lightx2v/lightx2v:26062001-cu130-5090-fix-260921",
   gpu_image_light: "runpod/base:1.0.2-ubuntu2404", gpu_boot: "light",
-  gpu_mode: "lite", gpu_lite_storage: "none", gpu_lite_cloud: "SECURE", gpu_lite_datacenter: "EU-RO-1", gpu_lite_volume_gb: "30",
-  gpu_lite_types: "NVIDIA RTX A5000,NVIDIA RTX A4000,NVIDIA RTX A4500,NVIDIA GeForce RTX 3090,NVIDIA GeForce RTX 3090 Ti,NVIDIA GeForce RTX 4080,NVIDIA L4,NVIDIA RTX A6000,NVIDIA GeForce RTX 4090",
+  gpu_mode: "lite", gpu_wait_minutes: "60", gpu_lite_storage: "none", gpu_lite_cloud: "SECURE", gpu_lite_datacenter: "EU-RO-1", gpu_lite_volume_gb: "30",
+  gpu_lite_types: "NVIDIA RTX A5000",   // fixed card; Start keeps retrying until one is free
   gpu_code_url: "https://raw.githubusercontent.com/smallkhk/Eden/main/gpu",
   gpu_secret: "", gpu_volume_id: "", gpu_pod_id: "",
 };
