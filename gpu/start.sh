@@ -50,7 +50,7 @@ fetch() {   # fetch <file> <dest>
   fi
   curl -fsSL "$LC_CODE_URL/$1?nocache=$(date +%s)" -o "$2"
 }
-for f in setup.sh eden_server.py live_runner.py write_config.py faceswap.py liveportrait.py; do
+for f in setup.sh eden_server.py live_runner.py write_config.py faceswap.py liveportrait.py dfm.py; do
   fetch "$f" "$LC/app/$f.new" && mv "$LC/app/$f.new" "$LC/app/$f" || echo "warn: could not fetch $f, using cached copy"
 done
 
@@ -214,6 +214,9 @@ if [[ ! -f "$LC/dlc/.hyperswap" ]]; then
   [[ $hok == 1 ]] && date > "$LC/dlc/.hyperswap" || echo "warn: HyperSwap download failed - face swap falls back to inswapper"
 fi
 [[ -s "$LC/dlc/models/hyperswap_1a_256.onnx" ]] || export LC_SWAP_MODEL=inswapper_128_fp16
+# 106-point landmarks for trained-face (.dfm) alignment, 5 MB
+[[ -s "$LC/dlc/models/2d106det.onnx" ]] || curl -fsSL --retry 3 -o "$LC/dlc/models/2d106det.onnx" \
+  "https://huggingface.co/hacksider/deep-live-cam/resolve/main/buffalo_l/buffalo_l/2d106det.onnx" || echo "warn: 2d106det download failed"
 # Live Portrait (KwaiVGI): code at a pinned commit + weights (~500 MB). One time.
 if [[ ! -f "$LC/lp/.done" ]]; then
   stage "installing Live Portrait (one time, ~2 min)"

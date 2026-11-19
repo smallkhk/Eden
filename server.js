@@ -80,6 +80,7 @@ const DEFAULTS = {
   smtp_host: "", smtp_port: "587", smtp_user: "", smtp_pass: "", smtp_from: "", site_url: "",
   // own GPU (RunPod)
   runpod_key: "", rate_eden_gpu: "1", gpu_idle_minutes: "15", gpu_volume_gb: "100",
+  gpu_dfm: "https://github.com/iperov/DeepFaceLive/releases/download/JOKER/Joker.dfm",   // Trained face model (.dfm link)
   gpu_type: "NVIDIA GeForce RTX 5090", gpu_datacenter: "EUR-IS-1", gpu_cloud: "SECURE",
   gpu_image: "lightx2v/lightx2v:26062001-cu130-5090-fix-260921",
   gpu_image_light: "runpod/base:1.0.2-ubuntu2404", gpu_boot: "light",
@@ -106,6 +107,7 @@ const ENGINES = {
   "eden-gpu": { rate: () => num("rate_eden_gpu"), provider: "gpu" },
   "dlc-gpu": { rate: () => num("rate_eden_gpu"), provider: "gpu" },   // face swap on the same pod
   "lp-gpu": { rate: () => num("rate_eden_gpu"), provider: "gpu" },    // Live Portrait on the same pod
+  "dfm-gpu": { rate: () => num("rate_eden_gpu"), provider: "gpu" },   // trained face (.dfm) on the same pod
 };
 
 // ---------- auth ----------
@@ -148,7 +150,7 @@ const requireAdmin = (req, res, next) =>
 const gpu = setupGpu({
   app, setting, setSetting, num, requireUser, requireAdmin,
   openSession: (userId) => openSession(userId),
-  anyGpuSession: () => !!q("SELECT 1 FROM sessions WHERE engine IN ('eden-gpu', 'dlc-gpu', 'lp-gpu') AND ended_at IS NULL LIMIT 1").get(),
+  anyGpuSession: () => !!q("SELECT 1 FROM sessions WHERE engine IN ('eden-gpu', 'dlc-gpu', 'lp-gpu', 'dfm-gpu') AND ended_at IS NULL LIMIT 1").get(),
   isGpuEngine: (engine) => ENGINES[engine]?.provider === "gpu",
 });
 
@@ -218,7 +220,7 @@ app.get("/api/config", (req, res) => {
     lucyModel: setting("lucy_model"), lucyFast: setting("lucy_fast") === "1",
     engines: { lucy: !!setting("decart_key"), eden: !!setting("fal_key"), voice: !!setting("elevenlabs_key"), gpu: gpu.status().ready, gpuStage: gpu.status().state },
     canReset: !!setting("smtp_host"),
-    rates: { lucy: num("rate_lucy"), "eden-5b": num("rate_eden_5b"), "eden-14b": num("rate_eden_14b"), "eden-gpu": num("rate_eden_gpu"), "dlc-gpu": num("rate_eden_gpu"), "lp-gpu": num("rate_eden_gpu"), firstFrame: num("first_frame_fee"), voice: num("rate_voice") },
+    rates: { lucy: num("rate_lucy"), "eden-5b": num("rate_eden_5b"), "eden-14b": num("rate_eden_14b"), "eden-gpu": num("rate_eden_gpu"), "dlc-gpu": num("rate_eden_gpu"), "lp-gpu": num("rate_eden_gpu"), "dfm-gpu": num("rate_eden_gpu"), firstFrame: num("first_frame_fee"), voice: num("rate_voice") },
   });
 });
 
@@ -615,7 +617,7 @@ const TEXT_KEYS = ["usdt_bsc_address", "usdt_tron_address", "smtp_host", "smtp_p
 const SECRET_KEYS = ["fal_key", "decart_key", "elevenlabs_key", "tron_api_key", "smtp_pass", "runpod_key"];
 
 app.get("/api/admin/settings", requireAdmin, (_req, res) => {
-  const out = { fal_key_hint: mask(setting("fal_key")), decart_key_hint: mask(setting("decart_key")), elevenlabs_key_hint: mask(setting("elevenlabs_key")), allow_signup: setting("allow_signup") === "1", lucy_fast: setting("lucy_fast") === "1", lucy_model: setting("lucy_model") };
+  const out = { fal_key_hint: mask(setting("fal_key")), decart_key_hint: mask(setting("decart_key")), elevenlabs_key_hint: mask(setting("elevenlabs_key")), allow_signup: setting("allow_signup") === "1", lucy_fast: setting("lucy_fast") === "1", lucy_model: setting("lucy_model"), gpu_dfm: setting("gpu_dfm") };
   for (const k of NUMERIC) out[k] = num(k);
   for (const k of TEXT_KEYS) out[k] = setting(k);
   out.tron_api_key_hint = mask(setting("tron_api_key")); out.smtp_pass_hint = mask(setting("smtp_pass")); out.runpod_key_hint = mask(setting("runpod_key"));
@@ -639,6 +641,7 @@ app.post("/api/admin/settings", requireAdmin, (req, res) => {
   if (b.allow_signup !== undefined) setSetting("allow_signup", b.allow_signup ? "1" : "0");
   if (b.lucy_fast !== undefined) setSetting("lucy_fast", b.lucy_fast ? "1" : "0");
   if (typeof b.lucy_model === "string" && /^lucy[\w.-]{0,30}$/.test(b.lucy_model.trim())) setSetting("lucy_model", b.lucy_model.trim());
+  if (typeof b.gpu_dfm === "string" && /^https:\/\/[^\s"'<>]{1,400}\.dfm$/i.test(b.gpu_dfm.trim())) setSetting("gpu_dfm", b.gpu_dfm.trim());
   res.json({ ok: true });
 });
 

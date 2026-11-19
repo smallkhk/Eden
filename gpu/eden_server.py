@@ -52,6 +52,17 @@ def get_faceswap():
     return faceswap_engine
 
 
+dfm_engine = None
+
+
+def get_dfm():
+    global dfm_engine
+    if dfm_engine is None:
+        from dfm import DFMEngine
+        dfm_engine = DFMEngine()
+    return dfm_engine
+
+
 def get_swapper():
     """One shared HyperSwap swapper for Face swap and Eden's face lock (models load once)."""
     eng = get_faceswap()
@@ -265,11 +276,14 @@ async def offer(req):
 
     def start_generation():
         mode = claims.get("mode")
-        eng = get_faceswap() if mode == "faceswap" else get_portrait() if mode == "portrait" else engine
+        eng = get_faceswap() if mode == "faceswap" else get_portrait() if mode == "portrait" else get_dfm() if mode == "dfm" else engine
 
         def work():
             try:
-                eng.run(live)
+                if mode == "dfm":
+                    eng.run(live, claims.get("dfm") or "")
+                else:
+                    eng.run(live)
             except Exception as e:
                 send({"type": "error", "error": f"{type(e).__name__}: {e}"[:300], "retryable": False})
             loop.call_soon_threadsafe(lambda: asyncio.ensure_future(finish()))
@@ -281,7 +295,7 @@ async def offer(req):
     async def stats_loop():
         while not live.ended:
             await asyncio.sleep(2)
-            send({"type": "stats", "generation_fps": round(live.fps, 1) if live.fps else None, "profile": claims.get("mode") if claims.get("mode") in ("faceswap", "portrait") else state["profile"]})
+            send({"type": "stats", "generation_fps": round(live.fps, 1) if live.fps else None, "profile": claims.get("mode") if claims.get("mode") in ("faceswap", "portrait", "dfm") else state["profile"]})
 
     async def reset(m):
         if m.get("prompt"):

@@ -42,6 +42,7 @@
       <div><label for="runpod_key">RunPod API key</label><input id="runpod_key" type="password" autocomplete="off" placeholder=""><div class="hint" id="rpHint"></div></div>
       <div><label for="rate_eden_gpu">Own GPU rate</label><input id="rate_eden_gpu" type="number" min="0" step="0.1"></div>
       <div><label for="gpu_idle_minutes">Auto-stop after idle (minutes)</label><input id="gpu_idle_minutes" type="number" min="1" step="1"></div>
+      <div style="grid-column:1/-1"><label for="gpu_dfm">Trained face model (.dfm link)</label><input id="gpu_dfm" type="url" placeholder="https://…/Name.dfm"><div class="hint">Used by the "Trained face" engine. Any direct https link to a DeepFaceLab .dfm file.</div></div>
     </div>
     <div class="hint">Save these with the "Save settings" button below.</div>
   </section>
@@ -206,10 +207,11 @@ async function loadSettings() {
   $("xiHint").textContent = s.elevenlabs_key_hint ? "Current: " + s.elevenlabs_key_hint : "No key saved yet";
   $("elevenlabs_key").placeholder = s.elevenlabs_key_hint ? "Paste a new key to replace it" : "Paste your ElevenLabs key";
   $("rpHint").textContent = s.runpod_key_hint ? "Current: " + s.runpod_key_hint : "No key saved yet";
+  $("gpu_dfm").value = s.gpu_dfm || "";
   $("runpod_key").placeholder = s.runpod_key_hint ? "Paste a new key to replace it" : "Paste your RunPod API key";
 }
 $("save").onclick = async () => {
-  const body = { allow_signup: $("allow_signup").checked, lucy_fast: $("lucy_fast").checked, fal_key: $("fal_key").value, decart_key: $("decart_key").value, elevenlabs_key: $("elevenlabs_key").value, tron_api_key: $("tron_api_key").value, smtp_pass: $("smtp_pass").value, runpod_key: $("runpod_key").value };
+  const body = { allow_signup: $("allow_signup").checked, lucy_fast: $("lucy_fast").checked, fal_key: $("fal_key").value, decart_key: $("decart_key").value, elevenlabs_key: $("elevenlabs_key").value, tron_api_key: $("tron_api_key").value, smtp_pass: $("smtp_pass").value, runpod_key: $("runpod_key").value, gpu_dfm: $("gpu_dfm").value };
   for (const k of NUMS) body[k] = $(k).value;
   for (const k of TEXTS) body[k] = $(k).value;
   try { await api("/api/admin/settings", body); for (const k of ["fal_key", "decart_key", "elevenlabs_key", "tron_api_key", "smtp_pass", "runpod_key"]) $(k).value = ""; await loadSettings(); say("Settings saved"); }
