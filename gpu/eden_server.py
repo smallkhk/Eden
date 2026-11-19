@@ -183,6 +183,9 @@ async def options(_req):
     return web.Response(headers=CORS)
 
 
+active = {"finish": None}     # the running session's finish(), so a new session can take over
+
+
 async def offer(req):
     body = await req.json()
     claims = check_token(body.get("token"))
@@ -190,6 +193,12 @@ async def offer(req):
         return web.json_response({"error": "Not authorised"}, status=403, headers=CORS)
     if not state["ready"]:
         return web.json_response({"error": f"GPU not ready: {state['stage']}"}, status=503, headers=CORS)
+    if state["busy"] and active.get("finish"):
+        # Single-owner GPU: a new Go live replaces a stale/old session instead of being refused.
+        try:
+            await asyncio.wait_for(active["finish"](), timeout=35)
+        except Exception:
+            pass
     if state["busy"]:
         return web.json_response({"error": "GPU is busy with another session"}, status=409, headers=CORS)
     state["busy"] = True
@@ -217,6 +226,8 @@ async def offer(req):
         if gen["closing"]:
             return
         gen["closing"] = True
+        if active.get("finish") is finish:
+            active["finish"] = None
         live.ended = True
         live.feed.shutdown()
         if gen["thread"]:
@@ -226,6 +237,8 @@ async def offer(req):
             current["sid"], current["apply"] = None, None
         await pc.close()
         pcs.discard(pc)
+
+    active["finish"] = finish
 
     def start_generation():
         mode = claims.get("mode")
