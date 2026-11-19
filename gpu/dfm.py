@@ -9,7 +9,7 @@ import os
 import cv2
 import numpy as np
 
-from faceswap import MODELS, _session, _umeyama
+from faceswap import MODELS, FFHQ_512, _align, _session, _umeyama
 
 # DeepFaceLive xlib/face/FLandmarks2D.py
 UNI_68 = np.float32([
@@ -125,7 +125,41 @@ class DFMSwapper:
         IM = cv2.invertAffineTransform(M)
         fm = cv2.warpAffine(mask, IM, (W, H))[..., None]
         fs = cv2.warpAffine(np.clip(celeb[..., ::-1] * 255, 0, 255).astype(np.float32), IM, (W, H), flags=cv2.INTER_LINEAR)
-        return (frame.astype(np.float32) * (1 - fm) + fs * fm).astype(np.uint8)
+        out = (frame.astype(np.float32) * (1 - fm) + fs * fm).astype(np.uint8)
+        return self._enhance(out, faces[0][1]) if self.enhance else out
+
+    # GFPGAN 1.4 pass on the swapped face: low-res (224/320) DFM output -> sharp eyes and skin.
+    _gfp = None
+
+    @property
+    def enhance(self):
+        if os.environ.get("LC_DFM_ENHANCE", "1") != "1":
+            return False
+        if DFMSwapper._gfp is None:
+            try:
+                DFMSwapper._gfp = _session("GFPGANv1.4.onnx", [("CUDAExecutionProvider", {}), "CPUExecutionProvider"])
+            except Exception as e:
+                print("dfm enhancer unavailable:", e, flush=True)
+                DFMSwapper._gfp = False
+        return bool(DFMSwapper._gfp)
+
+    _gmask = None
+
+    def _enhance(self, frame, kps):
+        M5 = _align(kps, FFHQ_512, 512)
+        crop = cv2.warpAffine(frame, M5, (512, 512), borderMode=cv2.BORDER_REPLICATE)
+        blob = ((crop.astype(np.float32) / 255.0 - 0.5) / 0.5).transpose(2, 0, 1)[None]
+        out = DFMSwapper._gfp.run(None, {"input": blob})[0][0]
+        sharp = ((out.transpose(1, 2, 0) + 1) * 127.5).clip(0, 255).astype(np.uint8)
+        if DFMSwapper._gmask is None:
+            m = np.zeros((512, 512), np.float32)
+            m[40:472, 40:472] = 1
+            DFMSwapper._gmask = cv2.GaussianBlur(m, (0, 0), 15)
+        H, W = frame.shape[:2]
+        IM = cv2.invertAffineTransform(M5)
+        ws = cv2.warpAffine(sharp, IM, (W, H)).astype(np.float32)
+        wm = cv2.warpAffine(DFMSwapper._gmask, IM, (W, H))[..., None]
+        return (frame.astype(np.float32) * (1 - wm) + ws * wm).astype(np.uint8)
 
 
 class DFMEngine:
