@@ -12,10 +12,13 @@ import threading
 import time
 
 import numpy as np
-import torch
+try:
+    import torch          # Eden only; the lite pod (face engines) runs without it
+except ImportError:
+    torch = None
 
 LC = os.environ.get("LC", "/workspace/lc")
-FPS = 24
+FPS = int(os.environ.get("LC_FPS", "24"))
 H, W = 1280, 704   # portrait: whole face in frame
 CHUNK = 3                       # latent frames per chunk = 12 output frames = 0.5 s
 DEFAULT_PROMPT = "A realistic person facing the camera, natural lighting, detailed, consistent identity."

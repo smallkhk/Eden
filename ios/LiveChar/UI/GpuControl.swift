@@ -13,6 +13,7 @@ struct GpuStatus: Decodable {
     let profile: String?
     let error: String?
     let hasKey: Bool?
+    let gpuType: String?
 }
 
 struct GpuControlCard: View {
@@ -74,7 +75,8 @@ struct GpuControlCard: View {
         if let e = g.error, !e.isEmpty { return "Error: \(e)" }
         if g.hasKey == false { return "Add your RunPod key in Admin on the website" }
         var parts: [String] = []
-        if g.state == "off" { parts.append("RTX 5090 · billed per second only while on") }
+        if g.state == "off" { parts.append("\(g.gpuType ?? "Cheap GPU") · billed per second only while on") }
+        else if let t = g.gpuType, !t.isEmpty { parts.append(t) }
         if let s = g.stage, !s.isEmpty, g.state != "off" { parts.append(s) }
         if let c = g.cost, g.state != "off" {
             let up = g.uptime ?? 0

@@ -9,7 +9,7 @@ import os
 import cv2
 import numpy as np
 
-from faceswap import MODELS, FFHQ_512, _align, _session, _umeyama
+from faceswap import MODELS, FFHQ_512, Smoother, _align, _session, _umeyama
 
 # DeepFaceLive xlib/face/FLandmarks2D.py
 UNI_68 = np.float32([
@@ -111,7 +111,10 @@ class DFMSwapper:
         if not faces:
             return frame
         box = faces[0][0]
-        l106 = self.landmarks(frame, box)
+        if not hasattr(self, "_smooth"):
+            self._smooth, self._smooth5 = Smoother(), Smoother()
+        l106 = self._smooth(self.landmarks(frame, box), box[2] - box[0])
+        faces = [(box, self._smooth5(faces[0][1], box[2] - box[0]), faces[0][2])]
         M = self.cut_mat(l106, self.res)
         aligned = cv2.warpAffine(frame, M, (self.res, self.res), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
         bgr = aligned[..., ::-1].astype(np.float32) / 255.0

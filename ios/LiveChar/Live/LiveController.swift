@@ -19,10 +19,8 @@ struct EngineDef: Identifiable, Hashable {
         EngineDef(id: "lucy", label: "Lucy", detail: "Decart · 720p · fastest", kind: .lucy, endpoint: "", width: 1280, height: 720, fps: 30, price: 0),
         EngineDef(id: "eden-5b", label: "Eden 5B", detail: "720p · 24 fps", kind: .eden, endpoint: "vast/eden-live-5b-video", width: 1280, height: 704, fps: 24, price: 0.0035),
         EngineDef(id: "eden-14b", label: "Eden 14B", detail: "480p · 16 fps", kind: .eden, endpoint: "vast/eden-live-14b-video", width: 832, height: 480, fps: 16, price: 0.01),
-        EngineDef(id: "eden-gpu", label: "My GPU", detail: "Eden 5B · own GPU · portrait · 24 fps", kind: .edenGpu, endpoint: "", width: 704, height: 1280, fps: 24, price: 0),
-        EngineDef(id: "dlc-gpu", label: "Face swap", detail: "Deep-Live-Cam · own GPU · portrait", kind: .edenGpu, endpoint: "", width: 704, height: 1280, fps: 24, price: 0),
-        EngineDef(id: "lp-gpu", label: "Portrait", detail: "Live Portrait · your photo comes alive · own GPU", kind: .edenGpu, endpoint: "", width: 704, height: 1280, fps: 24, price: 0),
-        EngineDef(id: "dfm-gpu", label: "Trained face", detail: "DeepFaceLab trained model (set in admin) · own GPU", kind: .edenGpu, endpoint: "", width: 704, height: 1280, fps: 24, price: 0),
+        EngineDef(id: "dlc-gpu", label: "Face swap", detail: "From a photo · HyperSwap 256 · own GPU", kind: .edenGpu, endpoint: "", width: 704, height: 1280, fps: 30, price: 0),
+        EngineDef(id: "dfm-gpu", label: "Trained face", detail: "Trained model (set in admin) · own GPU", kind: .edenGpu, endpoint: "", width: 704, height: 1280, fps: 30, price: 0),
     ]
     static func byID(_ id: String) -> EngineDef { all.first { $0.id == id } ?? all[0] }
 }

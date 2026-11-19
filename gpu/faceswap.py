@@ -22,7 +22,10 @@ FFHQ_512 = np.array([[192.98138, 239.94708], [318.90277, 240.19360], [256.63416,
 
 
 def _session(name, providers):
-    import torch  # noqa: F401  - loads CUDA 13 / cuDNN libs the ORT CUDA provider links to
+    try:
+        import torch  # noqa: F401  - on the Eden pod, loads the CUDA/cuDNN libs ORT links to
+    except ImportError:
+        pass
     import onnxruntime as ort
     try:
         ort.preload_dlls()
@@ -114,6 +117,27 @@ class Detector:
 
 
 
+class Smoother:
+    """Temporal filter for face points: removes frame-to-frame jitter (the 'swimming' face),
+    snaps straight to the new position on fast moves so it never lags behind."""
+
+    def __init__(self, alpha=0.55):
+        self.alpha, self.prev = alpha, None
+
+    def __call__(self, pts, size):
+        pts = np.asarray(pts, np.float32)
+        if self.prev is None or self.prev.shape != pts.shape:
+            self.prev = pts
+            return pts
+        move = float(np.abs(pts - self.prev).mean())
+        a = 1.0 if move > 0.08 * size else self.alpha + (1 - self.alpha) * min(1.0, move / (0.04 * size))
+        self.prev = a * pts + (1 - a) * self.prev
+        return self.prev
+
+    def reset(self):
+        self.prev = None
+
+
 SWAP_MODEL = os.environ.get("LC_SWAP_MODEL", "hyperswap_1a_256")   # or hyperswap_1c_256 / inswapper_128_fp16
 
 
@@ -185,6 +209,13 @@ class FaceSwapper:
         if self.source is None:
             return frame
         faces = self.detect(frame)[:max_faces]
+        if not hasattr(self, "_smooth"):
+            self._smooth = Smoother()
+        if not faces:
+            self._smooth.reset()
+        if len(faces) == 1:
+            b = faces[0][0]
+            faces = [(b, self._smooth(faces[0][1], b[2] - b[0]), faces[0][2])]
         for _box, kps, _score in faces:
             if self.hyper:
                 M = _align(kps, ARCFACE_112, 256)          # facefusion "arcface_128" template at 256 px
