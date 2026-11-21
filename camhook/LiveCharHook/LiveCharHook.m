@@ -435,7 +435,6 @@ static void lcDecodeCB(void *outRef, void *srcRef, OSStatus status, VTDecodeInfo
 
 #pragma mark - format conversion (match what the host app asked the camera for)
 
-// WhatsApp/Zoom configure the camera output for a specific pixel format (usually NV12). Our decoder
 // produces BGRA, so each substituted frame is converted to the format/size of the real frame it replaces,
 // scaled aspect-fill. Without this the app's encoder gets a mismatched buffer and sends black/green.
 static CIContext *gCI;
